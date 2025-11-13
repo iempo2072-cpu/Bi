@@ -16,7 +16,7 @@ local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 local Mouse = LocalPlayer:GetMouse()
 
 local Window = WindUI:CreateWindow({
-    Title = "Yomo HUB 🧑‍💻 | v2  | ",
+    Title = "Yomo HUB 🧑‍💻 | v1!  | ",
     Icon = "menu",
     Author = "https://discord.gg/xWW3jhKM",
     Folder = "KungHubkFolder",
@@ -228,7 +228,7 @@ local Tab_ESP = Window:Tab({Title = "ESP", Icon = "eye"})
 
 local boxESPEnabled = false
 local nameESPEnabled = false
-local itemESPEnabled = false
+local distanceESPEnabled = false -- <-- เพิ่ม toggle ระยะทาง
 local itemDropESPEnabled = false
 local espPlayers = {}
 
@@ -245,9 +245,9 @@ Tab_ESP:Toggle({
 })
 
 Tab_ESP:Toggle({
-    Title = "Inventory Viewer ESP",
-    Default = false,
-    Callback = function(v) itemESPEnabled = v end
+    Title = "Distance ESP",
+    Default = true,
+    Callback = function(v) distanceESPEnabled = v end
 })
 
 Tab_ESP:Toggle({
@@ -256,47 +256,8 @@ Tab_ESP:Toggle({
     Callback = function(v) itemDropESPEnabled = v end
 })
 
--- *******************************
--- Inventory Viewer (แบบใหม่ + ครบกว่าเดิม)
--- *******************************
-local function getPlayerInventory(player)
-    local inv = {}
-    -- ดึงจาก Backpack
-    local backpack = player:FindFirstChildOfClass("Backpack")
-    if backpack then
-        for _, item in ipairs(backpack:GetChildren()) do
-            if item:IsA("Tool") then
-                table.insert(inv, "🎒 " .. item.Name)
-            end
-        end
-    end
-
-    -- ดึงจาก Character (ถืออยู่)
-    if player.Character then
-        for _, tool in ipairs(player.Character:GetChildren()) do
-            if tool:IsA("Tool") then
-                table.insert(inv, "✋ " .. tool.Name)
-            end
-        end
-    end
-
-    -- เอาไอเท็มจาก StarterGear/StarterPack (ถ้าใช้ในเกมนั้น)
-    for _, folderName in ipairs({"StarterGear", "StarterPack"}) do
-        local folder = player:FindFirstChild(folderName)
-        if folder then
-            for _, tool in ipairs(folder:GetChildren()) do
-                if tool:IsA("Tool") then
-                    table.insert(inv, "🗄️ " .. tool.Name)
-                end
-            end
-        end
-    end
-
-    return inv
-end
-
 -- ********************************
--- ESP ผู้เล่น (แบบใหม่ครบชุด!!)
+-- ESP ผู้เล่น (ไม่มี Inventory, แสดงระยะทาง)
 -- ********************************
 local function createESP(player)
     local lines = {
@@ -312,11 +273,11 @@ local function createESP(player)
     nameText.Outline = true
     nameText.Color = Color3.fromRGB(255,0,0)
 
-    local itemText = Drawing.new("Text")
-    itemText.Size = 14
-    itemText.Center = false
-    itemText.Outline = true
-    itemText.Color = Color3.fromRGB(0,255,128)
+    local distText = Drawing.new("Text")
+    distText.Size = 14
+    distText.Center = false
+    distText.Outline = true
+    distText.Color = Color3.fromRGB(0,192,255)
 
     for _, line in pairs(lines) do
         line.Color = Color3.new(1,1,1)
@@ -324,14 +285,14 @@ local function createESP(player)
         line.Visible = false
     end
     nameText.Visible = false
-    itemText.Visible = false
+    distText.Visible = false
 
-    local drawings = {lines.top, lines.bottom, lines.left, lines.right, nameText, itemText}
+    local drawings = {lines.top, lines.bottom, lines.left, lines.right, nameText, distText}
 
     local conn = RunService.RenderStepped:Connect(function()
         if not player.Character then
             nameText.Visible = false
-            itemText.Visible = false
+            distText.Visible = false
             for _, l in pairs(lines) do l.Visible = false end
             return
         end
@@ -376,26 +337,25 @@ local function createESP(player)
             end
 
             -- ================
-            -- Inventory Viewer
+            -- แสดงระยะทาง
             -- ================
-            if itemESPEnabled then
-                local items = getPlayerInventory(player)
-                if #items > 0 then
-                    -- แสดงแต่ละบรรทัด (หลายแถว) item
-                    local txt = table.concat(items, "\n")
-                    itemText.Text = txt
-                    itemText.Position = Vector2.new(tl.X, bl.Y + 5)
-                    itemText.Visible = true
+            if distanceESPEnabled then
+                local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if myHRP then
+                    local dist = (hrp.Position - myHRP.Position).Magnitude
+                    distText.Text = string.format("Dist: %.1f", dist)
+                    distText.Position = Vector2.new(tr.X+6, br.Y)
+                    distText.Visible = true
                 else
-                    itemText.Visible = false
+                    distText.Visible = false
                 end
             else
-                itemText.Visible = false
+                distText.Visible = false
             end
 
         else
             nameText.Visible = false
-            itemText.Visible = false
+            distText.Visible = false
             for _, l in pairs(lines) do l.Visible = false end
         end
     end)
