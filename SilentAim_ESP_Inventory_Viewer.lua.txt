@@ -16,7 +16,7 @@ local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 local Mouse = LocalPlayer:GetMouse()
 
 local Window = WindUI:CreateWindow({
-    Title = "Yomo HUB 🧑‍💻 | v0.1  | ",
+    Title = "Yomo HUB 🧑‍💻 | v0.8  | ",
     Icon = "menu",
     Author = "https://discord.gg/xWW3jhKM",
     Folder = "KungHubkFolder",
@@ -228,7 +228,7 @@ local Tab_ESP = Window:Tab({Title = "ESP", Icon = "eye"})
 
 local boxESPEnabled = false
 local nameESPEnabled = false
-local distanceESPEnabled = false -- <-- เพิ่ม toggle ระยะทาง
+local distanceESPEnabled = false
 local itemDropESPEnabled = false
 local espPlayers = {}
 
@@ -336,9 +336,6 @@ local function createESP(player)
                 nameText.Visible = false
             end
 
-            -- ================
-            -- แสดงระยะทาง
-            -- ================
             if distanceESPEnabled then
                 local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
                 if myHRP then
@@ -475,8 +472,9 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- ====== Anti Dead (Anti Death/Auto Heal Feature) =======
+-- ====== Anti Dead (Safe, debug, ไม่ติดวาร์ปวน) =======
 local AntiDeadEnabled = false
+local antiDeadTeleported = false
 
 local Tab_Character = Window:Tab({Title = "CHARACTER:", Icon = "user"})
 Tab_Character:Toggle({
@@ -484,28 +482,55 @@ Tab_Character:Toggle({
     Default = false,
     Callback = function(enabled)
         AntiDeadEnabled = enabled
+        print("[AntiDead] Toggle:", enabled)
     end
 })
+
+LocalPlayer.CharacterAdded:Connect(function()
+    antiDeadTeleported = false
+    print("[AntiDead] CharacterAdded, reset flag")
+end)
 
 spawn(function()
     while true do
         wait(0.3)
-        if AntiDeadEnabled and LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
+        if AntiDeadEnabled and LocalPlayer.Character then
             local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-            if hum.Health <= 0 then
-                -- วาร์ปใต้พื้น
-                local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    hrp.CFrame = hrp.CFrame + Vector3.new(0,-45,0)
+            local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if hum and hrp then
+                print(string.format("[AntiDead] HP=%.0f  HRP.Y=%.2f  teleFlag=%s",
+                    hum.Health or -1, hrp.Position.Y, tostring(antiDeadTeleported))
+                )
+                if hum.Health <= 0 then
+                    if not antiDeadTeleported then
+                        print("[AntiDead] Dead detected, teleporting under ground and healing HP...")
+                        hrp.CFrame = hrp.CFrame + Vector3.new(0,-145,0)
+                        hum.Health = hum.MaxHealth
+                        local remote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Send")
+                        if remote then
+                            print("[AntiDead] Firing respawn remote...")
+                            pcall(function()
+                                remote:FireServer("death_screen_request_respawn")
+                            end)
+                        else
+                            print("[AntiDead] No respawn remote found!")
+                        end
+                        antiDeadTeleported = true
+                    else
+                        print("[AntiDead] Already teleported this death, waiting for respawn...")
+                    end
+                else
+                    if antiDeadTeleported then
+                        print("[AntiDead] HP alive, reset flag!")
+                    end
+                    antiDeadTeleported = false
                 end
-                -- Heal กลับเต็ม
-                hum.Health = hum.MaxHealth
-                -- รีสปอร์นอัตโนมัติ (ถ้ามี Remote)
-                local remote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Send")
-                if remote then
-                    remote:FireServer("death_screen_request_respawn")
-                end
+            else
+                print("[AntiDead] Humanoid or HRP missing!")
+                antiDeadTeleported = false
             end
+        else
+            antiDeadTeleported = false
         end
     end
 end)
