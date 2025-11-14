@@ -10,13 +10,8 @@ local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
 
 local LocalPlayer = Players.LocalPlayer
-local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local Humanoid = Character:WaitForChild("Humanoid")
-local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
-local Mouse = LocalPlayer:GetMouse()
-
 local Window = WindUI:CreateWindow({
-    Title = "Yomo HUB 🧑‍💻 | v0.8  | ",
+    Title = "Yomo HUB 🧑‍💻 | v0.1 | ",
     Icon = "menu",
     Author = "https://discord.gg/xWW3jhKM",
     Folder = "KungHubkFolder",
@@ -26,7 +21,7 @@ local Window = WindUI:CreateWindow({
     Resizable = true,
 })
 
-local button = Window:EditOpenButton({
+Window:EditOpenButton({
     Title = "Open Menu",
     Icon = "apple",
     CornerRadius = UDim.new(0,50),
@@ -36,6 +31,19 @@ local button = Window:EditOpenButton({
     Enabled = true,
     Draggable = false,
 })
+
+-- Utils
+local function getCharacterSafe()
+    return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+end
+local function getHumanoidSafe()
+    local char = getCharacterSafe()
+    return char and char:FindFirstChildOfClass("Humanoid") or nil
+end
+local function getHumanoidRootPartSafe()
+    local char = getCharacterSafe()
+    return char and char:FindFirstChild("HumanoidRootPart") or nil
+end
 
 ---------------------------------
 -- Silent Aim Tab & Logic -----
@@ -65,6 +73,7 @@ Tracer.Transparency = 1
 Tracer.Visible = false
 
 local function isBehindWall(startPos, endPos)
+    if not startPos or not endPos then return false end
     if (startPos - endPos).Magnitude < 2 then return false end
     local ignore = {LocalPlayer.Character}
     if CurrentTarget and CurrentTarget.Character then
@@ -80,8 +89,8 @@ local function isBehindWall(startPos, endPos)
     local rayResult = workspace:Raycast(startPos, direction * distance, params)
 
     if rayResult and rayResult.Instance then
-        if not (rayResult.Instance:IsDescendantOf(CurrentTarget.Character)
-        or rayResult.Instance:IsDescendantOf(LocalPlayer.Character)) then
+        if not (CurrentTarget and CurrentTarget.Character and rayResult.Instance:IsDescendantOf(CurrentTarget.Character))
+            and not rayResult.Instance:IsDescendantOf(LocalPlayer.Character) then
             return true
         end
     end
@@ -100,17 +109,18 @@ end
 local function getClosestTarget()
     local closest, shortestDistance = nil, math.huge
     local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
             local head = player.Character.Head
+            local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+            if not humanoid or humanoid.Health <= 0 then continue end
             local pos, onScreen = Camera:WorldToViewportPoint(head.Position)
             if onScreen then
                 local screenPos = Vector2.new(pos.X, pos.Y)
                 if (screenPos - center).Magnitude <= FOVRadius then
                     local toTarget = (head.Position - Camera.CFrame.Position).Unit
                     if Camera.CFrame.LookVector:Dot(toTarget) > 0.5 then
-                        local distance3D = (head.Position - LocalPlayer.Character.Head.Position).Magnitude
+                        local distance3D = (head.Position - getCharacterSafe():FindFirstChild("Head").Position).Magnitude
                         if distance3D < shortestDistance then
                             shortestDistance = distance3D
                             closest = player
@@ -124,9 +134,9 @@ local function getClosestTarget()
 end
 
 RunService.RenderStepped:Connect(function()
+    local char = getCharacterSafe()
     SilentFOVCircle.Visible = SilentAimEnabled
     SilentFOVCircle.Position = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
-
     if SilentAimEnabled then
         CurrentTarget = getClosestTarget()
     else
@@ -136,7 +146,7 @@ RunService.RenderStepped:Connect(function()
     if CurrentTarget and CurrentTarget.Character then
         local head = CurrentTarget.Character:FindFirstChild("Head")
         if head then
-            local myHead = LocalPlayer.Character:FindFirstChild("Head")
+            local myHead = char and char:FindFirstChild("Head")
             if myHead then
                 local a, ascr = Camera:WorldToViewportPoint(myHead.Position)
                 local b, bscr = Camera:WorldToViewportPoint(head.Position)
@@ -158,62 +168,62 @@ local function doRecoilGunMods()
     while task.wait(1) do
         for _, tool in pairs(LocalPlayer.Backpack:GetChildren()) do
             if tool:IsA("Tool") then
-                if tool:FindFirstChild("Recoil") then tool.Recoil.Value = 0 end
-                if tool:GetAttribute("Recoil") then tool:SetAttribute("Recoil", 0) end
+                pcall(function()
+                    if tool:FindFirstChild("Recoil") then tool.Recoil.Value = 0 end
+                    if tool:GetAttribute("Recoil") then tool:SetAttribute("Recoil", 0) end
+                end)
             end
         end
-        for _, tool in pairs(LocalPlayer.Character:GetChildren()) do
+        local char = getCharacterSafe()
+        for _, tool in pairs(char:GetChildren()) do
             if tool:IsA("Tool") then
-                if tool:FindFirstChild("Recoil") then tool.Recoil.Value = 0 end
-                if tool:GetAttribute("Recoil") then tool:SetAttribute("Recoil", 0) end
+                pcall(function()
+                    if tool:FindFirstChild("Recoil") then tool.Recoil.Value = 0 end
+                    if tool:GetAttribute("Recoil") then tool:SetAttribute("Recoil", 0) end
+                end)
             end
         end
     end
 end
 spawn(doRecoilGunMods)
 
-local Remote = ReplicatedStorage.Remotes.Send
-local oldFire = hookfunction(Remote.FireServer, function(self, ...)
-    if self ~= Remote then return oldFire(self, ...) end
+local Remote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Send")
+local oldFire = Remote and hookfunction(Remote.FireServer, function(self, ...)
     local args = {...}
-
-    if SilentAimEnabled and args[2] == "shoot_gun" and CurrentTarget then
-        local head = CurrentTarget.Character:FindFirstChild("Head")
-        local hrp = CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
-        if head and hrp then
-            local myPos = LocalPlayer.Character.Head.Position
-            local wall = isBehindWall(myPos, head.Position)
-            local aimPos = wall and predictWallbangPosition_New(head, hrp) or head.Position
-
-            args[4] = CFrame.new(math.huge, math.huge, math.huge)
-            args[5] = {
+    if not SilentAimEnabled or self ~= Remote then return oldFire(self, unpack(args)) end
+    if args[2] ~= "shoot_gun" or not CurrentTarget or not CurrentTarget.Character then return oldFire(self, unpack(args)) end
+    local head = CurrentTarget.Character:FindFirstChild("Head")
+    local hrp = CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
+    if head and hrp then
+        local myHead = getCharacterSafe():FindFirstChild("Head")
+        if not myHead then return oldFire(self, unpack(args)) end
+        local wall = isBehindWall(myHead.Position, head.Position)
+        local aimPos = wall and predictWallbangPosition_New(head, hrp) or head.Position
+        args[4] = CFrame.new(math.huge, math.huge, math.huge)
+        args[5] = {
+            [1] = {
                 [1] = {
-                    [1] = {
-                        ["Instance"] = head,
-                        ["Normal"] = Vector3.new(0,1,0),
-                        ["Position"] = aimPos,
-                        ["Wallbang"] = wall
-                    }
+                    ["Instance"] = wall and hrp or head,
+                    ["Normal"] = Vector3.new(0, 1, 0),
+                    ["Position"] = aimPos,
+                    ["Wallbang"] = wall,
                 }
             }
-        end
+        }
     end
-
     return oldFire(self, unpack(args))
-end)
+end) or function(...) end
 
 Tab:Toggle({
     Title = "Silent Aim",
     Default = false,
     Callback = function(v) SilentAimEnabled = v end
 })
-
 Tab:Toggle({
     Title = "No Recoil",
     Default = true,
     Callback = function(v) NoRecoilEnabled = v end
 })
-
 Tab:Slider({
     Title = "FOV:",
     Step = 1,
@@ -225,10 +235,9 @@ Tab:Slider({
 -- ESP Tab & Logic ------------
 -------------------------------
 local Tab_ESP = Window:Tab({Title = "ESP", Icon = "eye"})
-
 local boxESPEnabled = false
 local nameESPEnabled = false
-local distanceESPEnabled = false
+local distanceESPEnabled = true
 local itemDropESPEnabled = false
 local espPlayers = {}
 
@@ -237,28 +246,22 @@ Tab_ESP:Toggle({
     Default = false,
     Callback = function(v) boxESPEnabled = v end
 })
-
 Tab_ESP:Toggle({
     Title = "Name ESP",
     Default = false,
     Callback = function(v) nameESPEnabled = v end
 })
-
 Tab_ESP:Toggle({
     Title = "Distance ESP",
     Default = true,
     Callback = function(v) distanceESPEnabled = v end
 })
-
 Tab_ESP:Toggle({
     Title = "Item Drop ESP",
     Default = false,
     Callback = function(v) itemDropESPEnabled = v end
 })
 
--- ********************************
--- ESP ผู้เล่น (ไม่มี Inventory, แสดงระยะทาง)
--- ********************************
 local function createESP(player)
     local lines = {
         top = Drawing.new("Line"),
@@ -337,7 +340,7 @@ local function createESP(player)
             end
 
             if distanceESPEnabled then
-                local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                local myHRP = getHumanoidRootPartSafe()
                 if myHRP then
                     local dist = (hrp.Position - myHRP.Position).Magnitude
                     distText.Text = string.format("Dist: %.1f", dist)
@@ -377,7 +380,9 @@ local function loadESP()
     Players.PlayerRemoving:Connect(function(p)
         if espPlayers[p] then
             espPlayers[p].conn:Disconnect()
-            for _, d in pairs(espPlayers[p].drawings) do d:Remove() end
+            for _, d in pairs(espPlayers[p].drawings) do
+                pcall(function() d:Remove() end)
+            end
             espPlayers[p] = nil
         end
     end)
@@ -412,9 +417,9 @@ RunService.RenderStepped:Connect(function()
     if dropfolder then
         for obj, d in pairs(item_drawings) do
             if not obj or not obj.Parent then
-                d.box:Remove()
-                d.name:Remove()
-                d.dist:Remove()
+                pcall(function() d.box:Remove() end)
+                pcall(function() d.name:Remove() end)
+                pcall(function() d.dist:Remove() end)
                 item_drawings[obj] = nil
             end
         end
@@ -443,7 +448,7 @@ RunService.RenderStepped:Connect(function()
                     item_drawings[item] = esp
                 end
 
-                local pos, depth, onScr = Get2DPos(item.PickUpZone)
+                local pos, depth, onScr = Get2DPos(item:FindFirstChild("PickUpZone"))
                 if onScr and depth > 0 then
                     local size = math.clamp(100 / depth, 15, 40)
                     esp.box.Size = Vector2.new(size, size)
@@ -475,9 +480,8 @@ end)
 -- ====== Anti Dead (Safe, debug, ไม่ติดวาร์ปวน) =======
 local AntiDeadEnabled = false
 local antiDeadTeleported = false
-
-local Tab_Character = Window:Tab({Title = "CHARACTER:", Icon = "user"})
-Tab_Character:Toggle({
+local tab_character = Window:Tab({Title = "CHARACTER:", Icon = "user"})
+tab_character:Toggle({
     Title = "Anti Dead",
     Default = false,
     Callback = function(enabled)
@@ -494,39 +498,26 @@ end)
 spawn(function()
     while true do
         wait(0.3)
-        if AntiDeadEnabled and LocalPlayer.Character then
-            local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-            local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-            if hum and hrp then
-                print(string.format("[AntiDead] HP=%.0f  HRP.Y=%.2f  teleFlag=%s",
-                    hum.Health or -1, hrp.Position.Y, tostring(antiDeadTeleported))
-                )
-                if hum.Health <= 0 then
-                    if not antiDeadTeleported then
-                        print("[AntiDead] Dead detected, teleporting under ground and healing HP...")
-                        hrp.CFrame = hrp.CFrame + Vector3.new(0,-145,0)
-                        hum.Health = hum.MaxHealth
-                        local remote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Send")
-                        if remote then
-                            print("[AntiDead] Firing respawn remote...")
-                            pcall(function()
-                                remote:FireServer("death_screen_request_respawn")
-                            end)
-                        else
-                            print("[AntiDead] No respawn remote found!")
-                        end
-                        antiDeadTeleported = true
-                    else
-                        print("[AntiDead] Already teleported this death, waiting for respawn...")
+        local char = getCharacterSafe()
+        local hum = char and char:FindFirstChildOfClass("Humanoid") or nil
+        local hrp = char and char:FindFirstChild("HumanoidRootPart") or nil
+        if AntiDeadEnabled and hum and hrp then
+            if hum.Health <= 0 and hum:GetState() == Enum.HumanoidStateType.Dead then
+                if not antiDeadTeleported then
+                    print("[AntiDead] Dead detected, teleporting under ground and healing HP.")
+                    hrp.CFrame = hrp.CFrame + Vector3.new(0,-145,0)
+                    hum.Health = hum.MaxHealth
+                    local remote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Send")
+                    if remote then
+                        pcall(function()
+                            remote:FireServer("death_screen_request_respawn")
+                        end)
                     end
+                    antiDeadTeleported = true
                 else
-                    if antiDeadTeleported then
-                        print("[AntiDead] HP alive, reset flag!")
-                    end
-                    antiDeadTeleported = false
+                    -- Already teleported, waiting for respawn
                 end
             else
-                print("[AntiDead] Humanoid or HRP missing!")
                 antiDeadTeleported = false
             end
         else
