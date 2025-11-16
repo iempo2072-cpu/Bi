@@ -16,10 +16,10 @@ local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 local Mouse = LocalPlayer:GetMouse()
 
 local Window = WindUI:CreateWindow({
-    Title = "god HUB 🧑‍💻 | v0.1  | ",
+    Title = "god HUB 🧑‍💻 | v2  | ",
     Icon = "menu",
     Author = "",
-    Folder = "HubkFolder",
+    Folder = "",
     Size = UDim2.fromOffset(400, 200),
     Theme = "Dark",
     Transparent = true,
@@ -27,7 +27,7 @@ local Window = WindUI:CreateWindow({
 })
 
 local button = Window:EditOpenButton({
-    Title = "เปิดหี✌️",
+    Title = "mm",
     Icon = "apple",
     CornerRadius = UDim.new(0,50),
     StrokeThickness = 2,
@@ -43,10 +43,9 @@ local SilentAimEnabled = false
 local FOVRadius = 120
 local CurrentTarget = nil
 
--- ฟีเจอร์ใหม่
+-- ฟีเจอร์ใหม่ (Anti-Recoil ถูกตัดออก)
 local DirectShotEnabled = false      -- ยิงตรง (toggle)
 local BulletSpeed = 4000             -- ความเร็วกระสุน (default 4000)
-local AntiRecoilEnabled = false      -- กันปืนดีด (toggle)
 
 local SilentFOVCircle = Drawing.new("Circle")
 SilentFOVCircle.Color = Color3.fromRGB(255, 255, 0)
@@ -186,12 +185,6 @@ if Remote and Remote.FireServer then
 				-- Check obstruction (ยังไม่ใช่เงื่อนไขตัด)
 				local isObstructed = isBehindWall(LocalPlayer.Character.Head.Position, aimPos)
 
-				-- เก็บสภาพกล้องก่อนยิง ถ้าเปิด Anti-Recoil
-				local preCam = nil
-				if AntiRecoilEnabled then
-					pcall(function() preCam = Camera.CFrame end)
-				end
-
 				-- ถ้าเปิด DirectShot จะใส่ตำแหน่งการยิงลงใน args (โครงสร้าง args อาจต่างกันในเกมอื่น)
 				if DirectShotEnabled then
 					if type(args[5]) == "table" and args[5][1] and args[5][1][1] then
@@ -209,7 +202,7 @@ if Remote and Remote.FireServer then
 					end
 					args[4] = CFrame.new(aimPos)
 				else
-					-- ของเดิม: ตั้งเป็น ในfty เพื่อไม่ให้ระบุตำแหน่ง
+					-- ตั้งค่าเดิมเพื่อไม่ระบุตำแหน่ง
 					args[4] = CFrame.new(math.huge, math.huge, math.huge)
 				end
 
@@ -217,12 +210,13 @@ if Remote and Remote.FireServer then
 				args[6] = BulletSpeed
 
 				-- วาด beam เป็น visual ชั่วคราว
+				local headPos = (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head") and LocalPlayer.Character.Head.Position) or Vector3.new()
 				local beam = Instance.new("Part")
 				beam.Anchored = true
 				beam.CanCollide = false
-				beam.Size = Vector3.new(0.15, 0.15, (aimPos - (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head") and LocalPlayer.Character.Head.Position or Vector3.new())).Magnitude)
+				beam.Size = Vector3.new(0.15, 0.15, (aimPos - headPos).Magnitude)
 				if beam.Size.Z == 0 then beam.Size = Vector3.new(0.15,0.15,1) end
-				beam.CFrame = CFrame.new(LocalPlayer.Character.Head.Position, aimPos) * CFrame.new(0, 0, -beam.Size.Z/2)
+				beam.CFrame = CFrame.new(headPos, aimPos) * CFrame.new(0, 0, -beam.Size.Z/2)
 				beam.Material = Enum.Material.Neon
 				beam.Transparency = 0.25
 				beam.Parent = workspace
@@ -286,14 +280,6 @@ if Remote and Remote.FireServer then
 				-- เรียก remote ของเดิมกับ args ที่แก้ไข
 				local result = oldFire(self, unpack(args))
 
-				-- restore camera เล็กน้อย เพื่อชดเชย recoil ถ้าเปิด
-				if AntiRecoilEnabled and preCam then
-					spawn(function()
-						wait(0.03)
-						pcall(function() Camera.CFrame = preCam end)
-					end)
-				end
-
 				return result
 			end
 		end
@@ -303,7 +289,7 @@ else
 	warn("Unable to hook Remote.FireServer")
 end
 
--- UI Controls สำหรับ Silent Aim (รวม Direct Shot, Bullet Speed, Anti-Recoil)
+-- UI Controls สำหรับ Silent Aim (รวม Direct Shot และ Bullet Speed)
 Tab:Toggle({
 	Title = "Silent Aim",
 	Default = false,
@@ -337,19 +323,6 @@ Tab:Slider({
         BulletSpeed = tonumber(value) or 4000
         print("BulletSpeed", BulletSpeed)
     end
-})
-
-Tab:Toggle({
-	Title = "Anti-Recoil",
-	Default = false,
-	Callback = function(state)
-		AntiRecoilEnabled = state
-		if state then
-			WindUI:Notify({Title="Anti-Recoil Enabled", Description="กันปืนดีดเปิดแล้ว", Duration=2})
-		else
-			WindUI:Notify({Title="Anti-Recoil Disabled", Description="กันปืนดีดปิดแล้ว", Duration=2})
-		end
-	end
 })
 
 Tab:Slider({
