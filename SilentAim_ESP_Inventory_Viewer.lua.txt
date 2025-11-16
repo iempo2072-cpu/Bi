@@ -34,16 +34,12 @@ pcall(
         )()
     end
 )
-
--- ความเร็วกระสุน (units per second) ปรับเป็น 6000 ตามคำขอ
-local bulletSpeed = 6000
-
 local Window
 if WindUI then
     Window =
         WindUI:CreateWindow(
         {
-            Title = "rmix 🔫 | 0.1z | Premium  ",
+            Title = "yomo 🔫 | 0.1 | Premium  ",
             Icon = "cloud-lightning",
             Author = "mo",
             Folder = "yomo Now",
@@ -168,17 +164,124 @@ pcall(
 local CharModule = require(game.ReplicatedStorage.Modules.Core.Char)
 -- == Global Variables (Grouped by Feature) ==
 -- Silent Aim
+-- Replaced the original Silent Aim implementation with the improved one from message_silentaim_fix.lua.txt
 local SilentAimEnabled = false
-local SilentAimAttachEnabled = false
+local SilentAimAttachEnabled = false -- keep compatibility with UI that may reference attach anti-lock
 local FOVRadius = 120
 local CurrentTarget = nil
+
 local SilentFOVCircle = nil
 local Tracer = Drawing.new("Line")
 Tracer.Thickness = 1
 Tracer.Color = Color3.fromRGB(255, 50, 50)
 Tracer.Transparency = 1
 Tracer.Visible = false
+
+-- Settings for prediction
+local bulletSpeed = 6000 -- bullet speed used for lead prediction (units per second) <- set to 6000
+local maxPing = 0.1 -- cap ping to 100ms <- set to 100 ms
+
+local function disableRecoil()
+    if LocalPlayer.Character then
+        local backpack = LocalPlayer:FindFirstChild("Backpack")
+        for _, tool in pairs((backpack and backpack:GetChildren()) or {}) do
+            if tool:IsA("Tool") then
+                for _, sc in pairs(tool:GetChildren()) do
+                    if sc:IsA("LocalScript") and sc.Name:lower():find("recoil") then
+                        sc.Disabled = true
+                    end
+                end
+            end
+        end
+        -- also check character tools
+        for _, tool in pairs(LocalPlayer.Character:GetChildren()) do
+            if tool:IsA("Tool") then
+                for _, sc in pairs(tool:GetChildren()) do
+                    if sc:IsA("LocalScript") and sc.Name:lower():find("recoil") then
+                        sc.Disabled = true
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function getPing()
+    local stats = LocalPlayer:FindFirstChild("PlayerGui") and LocalPlayer.PlayerGui:FindFirstChild("NetworkStats")
+    if stats then
+        local pingText = stats:FindFirstChild("PingLabel")
+        if pingText and typeof(pingText.Text) == "string" then
+            local ping = tonumber(pingText.Text:match("%d+"))
+            return ping and ping / 1000 or maxPing
+        end
+    end
+    return maxPing
+end
+
+local function getPingCapped()
+    return math.min(getPing(), maxPing)
+end
+
+-- Silent Aim target (select closest, visible, in FOV)
+local function getClosestTarget_messageStyle()
+    local closest = nil
+    local shortestDistance = math.huge
+    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
+            local head = player.Character.Head
+            local pos, onScreen = Camera:WorldToViewportPoint(head.Position)
+
+            if onScreen and head.Position and Camera.CFrame.Position then
+                local screenPos = Vector2.new(pos.X, pos.Y)
+                local distFromCenter = (screenPos - center).Magnitude
+                if distFromCenter <= FOVRadius then
+                    local toTarget = (head.Position - Camera.CFrame.Position).Unit
+                    local forward = Camera.CFrame.LookVector
+                    local dot = forward:Dot(toTarget)
+                    -- easing the dot requirement to 0.1 for easier target select
+                    if dot > 0.1 then
+                        local distance3D = (head.Position - (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head") and LocalPlayer.Character.Head.Position or Camera.CFrame.Position)).Magnitude
+                        if distance3D < shortestDistance then
+                            shortestDistance = distance3D
+                            closest = player
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return closest
+end
+
+-- Predict target position based on bullet speed + ping
+local function predictPositionWithBullet(head, hrp)
+    local ping = getPingCapped()
+    local velocity = hrp and hrp.Velocity or Vector3.zero
+    local distance = (head.Position - Camera.CFrame.Position).Magnitude
+    local bulletTravelTime = (bulletSpeed > 0 and distance / bulletSpeed) or 0
+    local totalLeadTime = bulletTravelTime + ping * 1.15
+    return head.Position + (velocity * totalLeadTime)
+end
+
+-- Check obstruction between two points (legacy/compatible simple check)
+local function isObstructedOrNotWall(startPos, endPos)
+    local ray = Ray.new(startPos, endPos - startPos)
+    local ignoreList = {LocalPlayer.Character, CurrentTarget and CurrentTarget.Character or nil}
+    local hit, hitObj = Workspace:FindPartOnRayWithIgnoreList(ray, ignoreList)
+    if hitObj then
+        if hitObj.CanCollide and (hitObj.Transparency or 0) < 0.5 then
+            return true, hitObj -- obstruction found
+        end
+    end
+    return false, nil -- clear
+end
+
+-- =========================
 -- ESP
+-- =========================
 local espPlayers = {}
 local boxESPEnabled = false
 local nameESPEnabled = false
@@ -254,42 +357,8 @@ pcall(
         end
     end
 )
-
--- == New Features Variables ==
--- Combined Anti-Lock / Anti-Aim (user requested to combine)
-local CombinedAntiLockEnabled = false -- main combined toggle
-local AntiAimEnabled = false -- spinning visible to others
-local AntiAimSpeed = 540 -- degrees per second (default fast spin)
--- Keep original AntiLock (sky) values toggled by combined toggle
-getgenv().Sky = false
-getgenv().SkyAmount = 1500
-
--- Impact-trigger (เมื่อโดนชนหรือ "เซ" ให้เปิด anti-aim/anti-lock ชั่วคราว)
-local ImpactTriggerEnabled = true
-local ImpactTriggerDuration = 3 -- seconds
-local _impactActiveUntil = 0
-
--- Leg sink (ทำให้ขาจมดินโดยปรับ HipHeight)
-local LegSinkEnabled = false
-local LegSinkAmount = 0.5 -- studs to sink (positive number will lower hips)
-local originalHipHeight = nil
-
--- Run time / extra sprint (เพิ่มความเร็ว/เวลาวิ่ง)
-local RunTimeBoostEnabled = false
-local RunTimeMultiplier = 1.5 -- multiplier for WalkSpeed when boosted
-local originalWalkSpeed = nil
-
--- High jump (support mobile)
-local HighJumpEnabled = false
-local HighJumpPower = 70 -- JumpPower when enabled (default higher than normal)
-local originalJumpPower = nil
-local usingJumpPower = true -- prefer JumpPower if available
-
--- Internal helpers for restoring toggles
-local _prevCombinedState = false
-
 -- == Utility Functions ==
-local function getPing()
+local function getPing_old()
     local stats = LocalPlayer:FindFirstChild("PlayerGui") and LocalPlayer.PlayerGui:FindFirstChild("NetworkStats")
     if stats then
         local pingText = stats:FindFirstChild("PingLabel")
@@ -308,48 +377,14 @@ local function isPlayerExcluded(playerName)
     end
     return false
 end
+
+-- Note: Using the message-style getClosestTarget implementation
 local function getClosestTarget()
-    local closest = nil
-    local shortestDistance = FOVRadius -- ใช้ FOV เป็นขอบเขต
-    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            local head = player.Character:FindFirstChild("Head")
-            local humanoid = player.Character:FindFirstChild("Humanoid")
-            local hrp = player.Character:FindFirstChild("HumanoidRootPart")
-            if head and humanoid and humanoid.Health > 0 and hrp then
-                local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
-                if onScreen then
-                    local screenVector = Vector2.new(screenPos.X, screenPos.Y)
-                    local distanceFromCenter = (screenVector - center).Magnitude
-                    -- อยู่ใน FOV และไม่ถูกยกเว้น
-                    if distanceFromCenter <= FOVRadius and not isPlayerExcluded(player.Name) then
-                        if distanceFromCenter < shortestDistance then
-                            shortestDistance = distanceFromCenter
-                            closest = player
-                        end
-                    end
-                end
-            end
-        end
-    end
-    return closest
+    return getClosestTarget_messageStyle()
 end
 
--- ปรับ predictPosition ให้ใช้ bulletSpeed (เพิ่มการนำกระสุนตามเวลาเดินทาง)
 local function predictPosition(head, hrp)
-    local ping = getPing()
-    local originHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-    local originPos = originHead and originHead.Position or (HumanoidRootPart and HumanoidRootPart.Position) or (Camera and Camera.CFrame.Position)
-    local distance = (head.Position - originPos).Magnitude
-    local travelTime = 0
-    if bulletSpeed and bulletSpeed > 0 then
-        travelTime = distance / bulletSpeed
-    end
-    -- เพิ่ม factor เล็กน้อยสำหรับความไม่แน่นอนของ ping/lag
-    local leadTime = (ping + travelTime) * 1.15
-    local velocity = hrp and hrp.Velocity or Vector3.zero
-    return head.Position + (velocity * leadTime)
+    return predictPositionWithBullet(head, hrp)
 end
 
 local function isBehindWall(startPos, endPos)
@@ -371,38 +406,6 @@ local function setupCharacter(char)
     Character = char
     Humanoid = char:WaitForChild("Humanoid")
     HumanoidRootPart = char:WaitForChild("HumanoidRootPart")
-    -- store original values once
-    if originalHipHeight == nil and Humanoid then
-        pcall(function() originalHipHeight = Humanoid.HipHeight end)
-        if originalHipHeight == nil then
-            originalHipHeight = 0
-        end
-    end
-    if originalWalkSpeed == nil and Humanoid then
-        pcall(function() originalWalkSpeed = Humanoid.WalkSpeed end)
-        if originalWalkSpeed == nil then
-            originalWalkSpeed = 16
-        end
-    end
-    if originalJumpPower == nil and Humanoid then
-        pcall(function() originalJumpPower = Humanoid.JumpPower end)
-        if originalJumpPower == nil then
-            originalJumpPower = 50
-        end
-    end
-    -- apply leg sink if enabled
-    if LegSinkEnabled and Humanoid then
-        pcall(function() Humanoid.HipHeight = (originalHipHeight or 0) - LegSinkAmount end)
-    end
-    -- apply run boost if enabled
-    if RunTimeBoostEnabled and Humanoid then
-        pcall(function() Humanoid.WalkSpeed = (originalWalkSpeed or 16) * RunTimeMultiplier end)
-    end
-    -- apply high jump if enabled
-    if HighJumpEnabled and Humanoid then
-        pcall(function() Humanoid.JumpPower = HighJumpPower end)
-    end
-
     if moveConnection then
         pcall(
             function()
@@ -1387,14 +1390,15 @@ local function loadESP()
         end
     )
 end
--- Silent FOV Circle Setup
+
+-- Silent FOV Circle Setup (message-style)
 if not isMobile then
     SilentFOVCircle = Drawing.new("Circle")
-    SilentFOVCircle.Color = Color3.fromRGB(255, 255, 255)
-    SilentFOVCircle.Thickness = 2 -- Increased thickness for better visibility
+    SilentFOVCircle.Color = Color3.fromRGB(255, 255, 0)
+    SilentFOVCircle.Thickness = 1
     SilentFOVCircle.NumSides = 64
     SilentFOVCircle.Filled = false
-    SilentFOVCircle.Transparency = 0.8 -- Slightly less transparent for better visibility
+    SilentFOVCircle.Transparency = 1
     SilentFOVCircle.Radius = FOVRadius
     SilentFOVCircle.Visible = false
 else
@@ -1411,11 +1415,12 @@ else
     circleUI.Parent = SilentFOVCircle
     local border = Instance.new("UIStroke")
     border.Color = Color3.fromRGB(255, 255, 255)
-    border.Thickness = 2 -- Increased thickness for better visibility
-    border.Transparency = 0.2 -- Slightly less transparent for better visibility
+    border.Thickness = 2
+    border.Transparency = 0.2
     border.Parent = SilentFOVCircle
     SilentFOVCircle.Parent = ScreenGui
 end
+
 local function isShotgun()
     if not Character then
         return false
@@ -1430,128 +1435,48 @@ local function isShotgun()
     end
     return false
 end
-local oldFire
-if Remote and Remote.FireServer then
-    local ok, res = pcall(function()
-        oldFire = hookfunction(Remote.FireServer, function(self, ...)
-            if self ~= Remote then return oldFire(self, ...) end
-            local args = {...}
-            if SilentAimEnabled and args[2] == "shoot_gun" and CurrentTarget then
-		local head = CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("Head")
-		local hrp = CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
-		local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
-		if head and humanoid and hrp then
-			local aimPos = predictPosition(head, hrp)
-			local displacement = aimPos - head.Position
-			local hitCFrame = CurrentTarget.Character:GetPivot() + displacement
-			local previousHealth = humanoid.Health
 
-			-- Check if target is behind a wall (calculated but not used for conditional logic in original; kept for potential future use)
-			local isObstructed = isBehindWall(LocalPlayer.Character.Head.Position, aimPos)
+-- Hook Remote.FireServer for Silent Aim (message-style)
+-- We attempt to hook Remote.FireServer; if hookfunction is unavailable the pcall will warn but not crash
+local RemoteSend = Remote or (ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Send"))
 
-			args[4] = CFrame.new(math.huge, math.huge, math.huge)
-
-			args[5] = {
-				[1] = {
-					[1] = {
-						["Instance"] = head,
-						["Normal"] = Vector3.new(0, 1, 0),
-						["Position"] = aimPos
-					}
-				}
-			}
-
-                    -- origin position for beam (แก้ myPos ที่เคยไม่ประกาศ)
-                    local myPos = nil
-                    if LocalPlayer and LocalPlayer.Character then
-                        local myHead = LocalPlayer.Character:FindFirstChild("Head")
-                        if myHead then
-                            myPos = myHead.Position
-                        else
-                            myPos = (LocalPlayer.Character:FindFirstChild("HumanoidRootPart") and LocalPlayer.Character.HumanoidRootPart.Position) or (Camera and Camera.CFrame.Position)
-                        end
-                    else
-                        myPos = (HumanoidRootPart and HumanoidRootPart.Position) or (Camera and Camera.CFrame.Position)
+local ok, err = pcall(function()
+    if not RemoteSend or not RemoteSend.FireServer then
+        return
+    end
+    local oldFire = hookfunction and hookfunction(RemoteSend.FireServer, function(self, ...)
+        local args = {...}
+        -- only intercept shoot_gun actions
+        if SilentAimEnabled and tostring(args[2]) == "shoot_gun" and CurrentTarget and CurrentTarget.Character then
+            disableRecoil()
+            local head = CurrentTarget.Character:FindFirstChild("Head")
+            local hrp = CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
+            local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
+            if head and humanoid and hrp then
+                local aimPos = predictPositionWithBullet(head, hrp)
+                local isWall, wallObj = isObstructedOrNotWall(LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head") and LocalPlayer.Character.Head.Position or Camera.CFrame.Position, aimPos)
+                if isWall and wallObj then
+                    -- attempt to modify args safely (structures vary by game)
+                    if args[5] and args[5][1] and args[5][1][1] then
+                        args[5][1][1].Instance = wallObj
+                        args[5][1][1].Position = aimPos
                     end
-
-                    -- คำนวณเวลาการเดินทางของ beam ตาม bulletSpeed
-                    local travelTimeForBeam = 0
-                    if bulletSpeed and bulletSpeed > 0 then
-                        travelTimeForBeam = (aimPos - myPos).Magnitude / bulletSpeed
-                    end
-
-                    -- ✅ เอฟเฟกต์กระสุน
-                    local success, beam = pcall(function()
-                        local part = Instance.new("Part")
-                        part.Anchored = true
-                        part.CanCollide = false
-                        part.Size = Vector3.new(0.15, 0.15, (aimPos - myPos).Magnitude)
-                        part.CFrame = CFrame.new(myPos, aimPos) * CFrame.new(0, 0, -part.Size.Z / 2)
-                        part.Material = Enum.Material.Neon
-                        part.Transparency = 0.25
-                        part.Parent = Workspace
-                        Debris:AddItem(part, math.clamp(travelTimeForBeam + 0.2, 0.25, 4))
-                        return part
-                    end)
-
-                    if humanoid then
-                        local previousHealth = humanoid.Health
-                        spawn(function()
-                            wait(0.1)
-                            if humanoid and humanoid.Health < previousHealth then
-                                if success and beam then
-                                    beam.Color = Color3.fromRGB(0, 255, 0)
-                                end
-                                for _, part in ipairs(CurrentTarget.Character:GetDescendants()) do
-                                    if part:IsA("BasePart") then
-                                        local box = Instance.new("Part")
-                                        box.Size = part.Size + Vector3.new(0.05, 0.05, 0.05)
-                                        box.CFrame = part.CFrame
-                                        box.Anchored = true
-                                        box.CanCollide = false
-                                        box.Material = Enum.Material.Neon
-                                        box.Color = Color3.fromRGB(128, 0, 128)
-                                        box.Transparency = 0.5
-                                        box.Parent = Workspace
-                                        local tweenInfo = TweenInfo.new(1.5, Enum.EasingStyle.Linear)
-                                        TweenService:Create(box, tweenInfo, {Transparency = 1}):Play()
-                                        Debris:AddItem(box, 2)
-                                    end
-                                end
-                                if head then
-                                    local blood = Instance.new("Part")
-                                    blood.Size = Vector3.new(0.2, 0.2, 0.2)
-                                    blood.Shape = Enum.PartType.Ball
-                                    blood.Material = Enum.Material.Neon
-                                    blood.Color = Color3.fromRGB(255, 0, 0)
-                                    blood.CFrame = CFrame.new(head.Position)
-                                    blood.Anchored = false
-                                    blood.CanCollide = false
-                                    blood.Parent = Workspace
-                                    local bv = Instance.new("BodyVelocity")
-                                    bv.Velocity = Vector3.new(math.random(-5, 5), math.random(5, 10), math.random(-5, 5))
-                                    bv.P = 5000
-                                    bv.MaxForce = Vector3.new(4000, 4000, 4000)
-                                    bv.Parent = blood
-                                    Debris:AddItem(blood, 1)
-                                end
-                            else
-                                if success and beam then
-                                    beam.Color = Color3.fromRGB(255, 0, 0)
-                                end
-                            end
-                        end)
+                else
+                    if args[5] and args[5][1] and args[5][1][1] then
+                        args[5][1][1].Instance = head
+                        args[5][1][1].Position = aimPos
                     end
                 end
+                -- obscure aim origin to avoid certain checks
+                args[4] = CFrame.new(math.huge, math.huge, math.huge)
             end
-
-            return oldFire(self, unpack(args))
-        end)
+            print("Silent Aim Fired at:", CurrentTarget.Name, "Pos:", args[5] and args[5][1] and args[5][1][1] and args[5][1][1].Position)
+        end
+        return oldFire(self, unpack(args))
     end)
-
-    if not ok then
-        warn("Warning: failed to hook Remote.FireServer")
-    end
+end)
+if not ok then
+    warn("Warning: failed to hook Remote.Send.FireServer for Silent Aim:", err)
 end
 
 -- Main Render Loop
@@ -1559,20 +1484,28 @@ RunService.RenderStepped:Connect(
     function()
         pcall(
             function()
-                if SilentAimAttachEnabled then
-                    CurrentTarget = getClosestTarget()
-                end
-                if SilentFOVCircle then
-                    SilentFOVCircle.Visible = SilentAimEnabled or SilentAimAttachEnabled
-                    if isMobile then
-                        SilentFOVCircle.Position = UDim2.fromScale(0.5, 0.5)
-                        SilentFOVCircle.Size = UDim2.fromOffset(FOVRadius * 2, FOVRadius * 2)
-                    else
-                        SilentFOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-                        SilentFOVCircle.Radius = FOVRadius
+                -- update FOV circle visibility and position
+                SilentFOVCircle.Visible = SilentAimEnabled or SilentAimAttachEnabled
+                if isMobile and typeof(SilentFOVCircle) == "Instance" then
+                    SilentFOVCircle.Position = UDim2.fromScale(0.5, 0.5)
+                    SilentFOVCircle.Size = UDim2.fromOffset(FOVRadius * 2, FOVRadius * 2)
+                else
+                    if SilentFOVCircle and SilentFOVCircle.Position then
+                        -- Drawing circle uses Vector2
+                        if typeof(SilentFOVCircle) == "userdata" then
+                            SilentFOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+                            SilentFOVCircle.Radius = FOVRadius
+                        end
                     end
                 end
-                CurrentTarget = (SilentAimEnabled or SilentAimAttachEnabled) and getClosestTarget() or nil
+
+                -- choose target according to selected silent settings
+                if SilentAimEnabled or SilentAimAttachEnabled then
+                    CurrentTarget = getClosestTarget()
+                else
+                    CurrentTarget = nil
+                end
+
                 if CurrentTarget and CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("Head") then
                     local targetHead = CurrentTarget.Character.Head
                     local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
@@ -1593,6 +1526,7 @@ RunService.RenderStepped:Connect(
                 else
                     Tracer.Visible = false
                 end
+
                 if FlyEnabled and isFlyingUp and HumanoidRootPart then
                     local v = HumanoidRootPart.Velocity
                     HumanoidRootPart.Velocity = Vector3.new(v.X, floatPower, v.Z)
@@ -1607,117 +1541,6 @@ RunService.RenderStepped:Connect(
         )
     end
 )
-
--- Anti-Aim spinning (visible to others, keep camera intact locally)
-RunService.RenderStepped:Connect(function(delta)
-    pcall(function()
-        -- Determine if anti-aim should be active: either combined toggle is on OR impact-based temporary activation
-        local antiAimShouldBeOn = false
-        if CombinedAntiLockEnabled then
-            antiAimShouldBeOn = true
-        end
-        -- temporary impact activation
-        if tick() < _impactActiveUntil then
-            antiAimShouldBeOn = true
-        end
-
-        if antiAimShouldBeOn and HumanoidRootPart and Camera then
-            local camCFrame = Camera.CFrame -- save current camera frame so we can restore it after rotating HRP
-            local yawIncrement = math.rad(AntiAimSpeed) * delta
-            -- rotate HumanoidRootPart (this will replicate to others)
-            HumanoidRootPart.CFrame = HumanoidRootPart.CFrame * CFrame.Angles(0, yawIncrement, 0)
-            -- keep local camera the same so player doesn't feel rotated
-            Camera.CFrame = camCFrame
-        end
-        -- apply sky if combined enabled or impact active
-        if CombinedAntiLockEnabled or tick() < _impactActiveUntil then
-            getgenv().Sky = true
-        else
-            getgenv().Sky = false
-        end
-    end)
-end)
-
--- Keep leg sink/HipHeight, run boost, and high jump applied if toggles are on
-RunService.Heartbeat:Connect(function()
-    pcall(function()
-        if LegSinkEnabled and Humanoid then
-            Humanoid.HipHeight = (originalHipHeight or 0) - LegSinkAmount
-        elseif Humanoid and originalHipHeight ~= nil then
-            Humanoid.HipHeight = originalHipHeight
-        end
-
-        if RunTimeBoostEnabled and Humanoid then
-            Humanoid.WalkSpeed = (originalWalkSpeed or 16) * RunTimeMultiplier
-        elseif Humanoid and originalWalkSpeed ~= nil then
-            Humanoid.WalkSpeed = originalWalkSpeed
-        end
-
-        if HighJumpEnabled and Humanoid then
-            -- prefer JumpPower
-            pcall(function()
-                Humanoid.JumpPower = HighJumpPower
-            end)
-        elseif Humanoid and originalJumpPower ~= nil then
-            pcall(function()
-                Humanoid.JumpPower = originalJumpPower
-            end)
-        end
-    end)
-end)
-
--- Impact detection: เมื่อโดนชน (HumanoidRootPart.Touched) หรือเมื่อ "เซ" (บาง state เช่น FallingDown / GettingUp / PlatformStanding)
--- จะเปิด anti-aim + anti-lock ชั่วคราว
-local function triggerImpactAnti(duration)
-    duration = tonumber(duration) or ImpactTriggerDuration
-    _impactActiveUntil = math.max(_impactActiveUntil, tick() + duration)
-end
-
--- Touched handler: ถ้าโดนผู้เล่นอื่นหรือของที่มี Humanoid ให้ทริกเกอร์
-local function onPartTouched(otherPart)
-    if not ImpactTriggerEnabled then return end
-    if not otherPart or not otherPart.Parent then return end
-    local otherHum = otherPart.Parent:FindFirstChildOfClass("Humanoid")
-    if otherHum then
-        -- ถ้าเป็นผู้เล่นอื่นหรือมี humanoid ให้ทริกเกอร์
-        local otherPlayer = Players:GetPlayerFromCharacter(otherPart.Parent)
-        if otherPlayer and otherPlayer ~= LocalPlayer then
-            triggerImpactAnti(ImpactTriggerDuration)
-            return
-        else
-            -- ถ้าเป็น NPC หรือ object ที่มี humanoid ก็ทริกเกอร์เช่นกัน
-            triggerImpactAnti(ImpactTriggerDuration)
-            return
-        end
-    end
-end
-
--- StateChanged handler: ตรวจหา state ที่เป็น "เซ" หรือถูกล้ม
-local function onStateChanged(old, new)
-    if not ImpactTriggerEnabled then return end
-    -- states that might indicate being stunned/knocked
-    if new == Enum.HumanoidStateType.FallingDown or new == Enum.HumanoidStateType.GettingUp or new == Enum.HumanoidStateType.PlatformStanding or new == Enum.HumanoidStateType.Ragdoll then
-        triggerImpactAnti(ImpactTriggerDuration)
-    end
-end
-
--- Connect impact detection safely (reconnect when character spawns)
-local function connectImpactDetections()
-    pcall(function()
-        if HumanoidRootPart and Humanoid then
-            -- disconnect previous if any
-            if HumanoidRootPart._impactConn then
-                pcall(function() HumanoidRootPart._impactConn:Disconnect() end)
-            end
-            if Humanoid._stateConn then
-                pcall(function() Humanoid._stateConn:Disconnect() end)
-            end
-            HumanoidRootPart._impactConn = HumanoidRootPart.Touched:Connect(onPartTouched)
-            Humanoid._stateConn = Humanoid.StateChanged:Connect(onStateChanged)
-        end
-    end)
-end
-
 -- Loops
 RunService.Heartbeat:Connect(
     function()
@@ -1824,9 +1647,6 @@ LocalPlayer.CharacterAdded:Connect(
                 end
             end
         )
-        -- Reconnect impact detection when character respawns
-        setupCharacter(char)
-        connectImpactDetections()
     end
 )
 -- == Connections and Setup ==
@@ -1834,16 +1654,6 @@ LocalPlayer.CharacterAdded:Connect(setupCharacter)
 if LocalPlayer.Character then
     setupCharacter(LocalPlayer.Character)
 end
-
--- Initial connect for impact detection
-connectImpactDetections()
-
--- Provide function to externally trigger temporary anti-lock (useful for remote triggers)
-local function TemporarilyEnableCombined(duration)
-    duration = tonumber(duration) or ImpactTriggerDuration
-    _impactActiveUntil = math.max(_impactActiveUntil, tick() + duration)
-end
-
 UserInputService.InputBegan:Connect(
     function(input, gameProcessed)
         if gameProcessed then
@@ -2139,3 +1949,674 @@ local HitAuraToggle =
     }
 )
 myConfig:Register("HitAura", HitAuraToggle)
+local Tab_mods = Window:Tab({Title = "WEAPON:", Icon = "layers"})
+Tab_mods:Section({Title = "MODS:"})
+local FastShootButton =
+    Tab_mods:Button(
+    {
+        Title = "Fast Shoot (No Recoil)",
+        Default = false,
+        Callback = function()
+            local player = Players.LocalPlayer
+            local character = player.Character
+            if character then
+                local tools = {}
+                for _, tool in pairs(character:GetChildren()) do
+                    if tool:IsA("Tool") then
+                        table.insert(tools, tool)
+                    end
+                end
+                if #tools > 0 then
+                    for _, tool in ipairs(tools) do
+                        local attrs = tool:GetAttributes()
+                        local attrNames = {}
+                        for name, _ in pairs(attrs) do
+                            table.insert(attrNames, name)
+                        end
+                        table.sort(attrNames)
+                        if #attrNames >= 6 then
+                            tool:SetAttribute(attrNames[6], 1500)
+                        end
+                        if tool:GetAttribute("Recoil") ~= nil then
+                            tool:SetAttribute("Recoil", 0)
+                        end
+                    end
+                    if WindUI then
+                        WindUI:Notify(
+                            {
+                                Title = "✅ Tool Updated",
+                                Description = "ปรับค่า Fast Shoot ให้ Tool ทั้งหมดเรียบร้อยแล้ว!",
+                                Duration = 3
+                            }
+                        )
+                    end
+                else
+                    if WindUI then
+                        WindUI:Notify(
+                            {
+                                Title = "❌ No Tool Found",
+                                Description = "กรุณาถือปืนก่อนจึงจะปรับค่าได้",
+                                Duration = 3
+                            }
+                        )
+                    end
+                end
+            else
+                if WindUI then
+                    WindUI:Notify(
+                        {
+                            Title = "❌ Character Not Found",
+                            Description = "กรุณารีสปอร์นก่อนใช้งาน",
+                            Duration = 3
+                        }
+                    )
+                end
+            end
+        end
+    }
+)
+myConfig:Register("FastShoot", FastShootButton)
+local Tab_ESP = Window:Tab({Title = "ESP:", Icon = "eye"})
+Tab_ESP:Section({Title = "ESP:"})
+local BoxESPToggle =
+    Tab_ESP:Toggle(
+    {
+        Title = "Box ESP",
+        Default = false,
+        Callback = function(state)
+            boxESPEnabled = state
+        end
+    }
+)
+myConfig:Register("BoxESP", BoxESPToggle)
+local NameESPToggle =
+    Tab_ESP:Toggle(
+    {
+        Title = "Name ESP",
+        Default = false,
+        Callback = function(state)
+            nameESPEnabled = state
+        end
+    }
+)
+myConfig:Register("NameESP", NameESPToggle)
+local HealthESPToggle =
+    Tab_ESP:Toggle(
+    {
+        Title = "Health ESP",
+        Default = false,
+        Callback = function(state)
+            healthESPEnabled = state
+        end
+    }
+)
+myConfig:Register("HealthESP", HealthESPToggle)
+local DistanceESPToggle =
+    Tab_ESP:Toggle(
+    {
+        Title = "Distance ESP",
+        Default = false,
+        Callback = function(state)
+            distanceESPEnabled = state
+        end
+    }
+)
+myConfig:Register("DistanceESP", DistanceESPToggle)
+local HighlightToggle =
+    Tab_ESP:Toggle(
+    {
+        Title = "Highlight",
+        Default = false,
+        Callback = function(state)
+            highlightEnabled = state
+            if not state then
+                for _, hl in pairs(highlights) do
+                    if hl and hl.Destroy then
+                        pcall(
+                            function()
+                                hl:Destroy()
+                            end
+                        )
+                    end
+                end
+                highlights = {}
+            else
+                pcall(
+                    function()
+                        for _, pl in ipairs(Players:GetPlayers()) do
+                            if pl ~= LocalPlayer and pl.Character then
+                                if not highlights[pl] then
+                                    local ok, newHl =
+                                        pcall(
+                                        function()
+                                            local h = Instance.new("Highlight")
+                                            h.FillColor = Color3.fromRGB(200, 0, 255)
+                                            h.OutlineColor = Color3.fromRGB(255, 255, 255)
+                                            h.FillTransparency = 0.3
+                                            h.OutlineTransparency = 0
+                                            h.Parent = pl.Character or Workspace
+                                            h.Adornee = pl.Character
+                                            return h
+                                        end
+                                    )
+                                    if ok and newHl then
+                                        highlights[pl] = newHl
+                                    end
+                                end
+                            end
+                        end
+                    end
+                )
+            end
+        end
+    }
+)
+myConfig:Register("Highlight", HighlightToggle)
+local ItemsESPToggle =
+    Tab_ESP:Toggle(
+    {
+        Title = "Items ESP",
+        Default = false,
+        Callback = function(state)
+            ESPEnabled = state
+            if state then
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p ~= LocalPlayer and p.Character then
+                        createBillboardForPlayer(p)
+                    end
+                end
+                ESPConnection =
+                    RunService.Heartbeat:Connect(
+                    function()
+                        for _, p in ipairs(Players:GetPlayers()) do
+                            if p ~= LocalPlayer and p.Character then
+                                createBillboardForPlayer(p)
+                            end
+                        end
+                    end
+                )
+                if WindUI then
+                    WindUI:Notify(
+                        {
+                            Title = "✅ ESP Items Enabled",
+                            Description = "✅ Item ESP functionality activated",
+                            Duration = 3
+                        }
+                    )
+                end
+            else
+                if ESPConnection then
+                    ESPConnection:Disconnect()
+                    ESPConnection = nil
+                end
+                for _, billboard in pairs(BillboardCache) do
+                    billboard:Destroy()
+                end
+                BillboardCache = {}
+                if WindUI then
+                    WindUI:Notify(
+                        {
+                            Title = "❌ ESP Items Disabled",
+                            Description = "❌ Item ESP functionality deactivated",
+                            Duration = 3
+                        }
+                    )
+                end
+            end
+        end
+    }
+)
+myConfig:Register("ItemsESP", ItemsESPToggle)
+local Tab_Character = Window:Tab({Title = "CHARACTER:", Icon = "user"})
+Tab_Character:Section({Title = "CHARACTER:"})
+local WalkSpeedToggle =
+    Tab_Character:Toggle(
+    {
+        Title = "Walk Speed",
+        Default = false,
+        Callback = function(state)
+            walkSpeedEnabled = state
+        end
+    }
+)
+myConfig:Register("WalkSpeed", WalkSpeedToggle)
+local SpeedSlider =
+    Tab_Character:Slider(
+    {
+        Title = "Speed Multiplier",
+        Step = 0.5,
+        Value = {
+            Min = 1,
+            Max = 3,
+            Default = 2
+        },
+        Callback = function(value)
+            speedValue = value * 0.07
+        end
+    }
+)
+myConfig:Register("SpeedMultiplier", SpeedSlider)
+local JumpPowerToggle =
+    Tab_Character:Toggle(
+    {
+        Title = "Jump Power",
+        Default = false,
+        Callback = function(state)
+            FlyEnabled = state
+            if not FlyEnabled then
+                flying = false
+            end
+        end
+    }
+)
+myConfig:Register("JumpPower", JumpPowerToggle)
+-- รอ
+local Net = {}
+function Net.send(...)
+    local args = {...}
+    CounterTable.event = CounterTable.event + 1
+    pcall(
+        function()
+            Remotes.Send:FireServer(CounterTable.event, unpack(args))
+        end
+    )
+end
+local AutoSprintToggle =
+    Tab_Character:Toggle(
+    {
+        Title = "Infinite Stamina",
+        Default = false,
+        Callback = function(state)
+            AutoSprintEnabled = state
+            if AutoSprintEnabled then
+                -- Override stamina update to prevent depletion
+                local success, SprintModule =
+                    pcall(
+                    function()
+                        return require(ReplicatedStorage.Modules.Game.Sprint)
+                    end
+                )
+                if success and SprintModule then
+                    local consume_stamina = SprintModule.consume_stamina
+                    local SprintBar = getupvalue(consume_stamina, 2).sprint_bar
+                    if SprintBar then
+                        local Old = SprintBar.update
+                        SprintBar.update = function(...)
+                            return Old(
+                                function()
+                                    return 1
+                                end
+                            ) -- Keep stamina at full
+                        end
+                        -- Store original function for restoration
+                        getgenv().OriginalSprintUpdate = Old
+                        -- Start auto sprint loop
+                        getgenv().AutoSprintLoop =
+                            task.spawn(
+                            function()
+                                while AutoSprintEnabled do
+                                    pcall(
+                                        function()
+                                            Net.send("set_sprinting_1", true)
+                                            task.wait(0.5)
+                                            Net.send("set_sprinting_1", false)
+                                        end
+                                    )
+                                    task.wait(0.1) -- Prevent excessive CPU usage
+                                end
+                                -- Ensure sprint is disabled when loop ends
+                                pcall(
+                                    function()
+                                        Net.send("set_sprinting_1", false)
+                                    end
+                                )
+                            end
+                        )
+                        if WindUI then
+                            WindUI:Notify(
+                                {
+                                    Title = "✅ INF STAMINA",
+                                    Description = "Auto Sprint และ Infinite Stamina ทำงานแล้ว",
+                                    Duration = 3
+                                }
+                            )
+                        end
+                    else
+                        warn("❌ ไม่พบ SprintBar!")
+                        AutoSprintEnabled = false
+                        AutoSprintToggle:Set(false)
+                    end
+                else
+                    warn("❌ ไม่สามารถโหลด SprintModule ได้!")
+                    AutoSprintEnabled = false
+                    AutoSprintToggle:Set(false)
+                end
+            else
+                -- Stop sprint loop and restore stamina behavior
+                if getgenv().AutoSprintLoop then
+                    task.cancel(getgenv().AutoSprintLoop)
+                    getgenv().AutoSprintLoop = nil
+                end
+                -- Ensure sprint is disabled
+                pcall(
+                    function()
+                        Net.send("set_sprinting_1", false)
+                    end
+                )
+                -- Restore original stamina update function
+                local success, SprintModule =
+                    pcall(
+                    function()
+                        return require(ReplicatedStorage.Modules.Game.Sprint)
+                    end
+                )
+                if success and SprintModule then
+                    local consume_stamina = SprintModule.consume_stamina
+                    local SprintBar = getupvalue(consume_stamina, 2).sprint_bar
+                    if SprintBar and getgenv().OriginalSprintUpdate then
+                        SprintBar.update = getgenv().OriginalSprintUpdate
+                        getgenv().OriginalSprintUpdate = nil
+                    end
+                end
+                if WindUI then
+                    WindUI:Notify(
+                        {
+                            Title = "❌ Auto Sprint Disabled",
+                            Description = "Auto Sprint และ Infinite Stamina ถูกปิดแล้ว",
+                            Duration = 3
+                        }
+                    )
+                end
+            end
+        end
+    }
+)
+myConfig:Register("AutoSprint", AutoSprintToggle)
+local AntiLockToggle =
+    Tab_Character:Toggle(
+    {
+        Title = "Anti Lock",
+        Default = false,
+        Callback = function(state)
+            getgenv().Sky = state
+            if state then
+                getgenv().SkyAmount = 1500
+            end
+        end
+    }
+)
+myConfig:Register("AntiLock", AntiLockToggle)
+local AntiKillToggle =
+    Tab_Character:Toggle(
+    {
+        Title = "Anti Kill",
+        Default = false,
+        Callback = function(state)
+            enabled = state
+            if state then
+                if WindUI then
+                    WindUI:Notify(
+                        {
+                            Title = "🛡️ Anti Kill Enabled",
+                            Description = "คุณจะวาร์ปใต้พื้นและเคลื่อนที่รอบๆ 10m เพื่อหลบการโจมตี",
+                            Duration = 3
+                        }
+                    )
+                end
+            else
+                if WindUI then
+                    WindUI:Notify(
+                        {
+                            Title = "❌ Anti Kill Disabled",
+                            Description = "ระบบป้องกันถูกปิดแล้ว",
+                            Duration = 3
+                        }
+                    )
+                end
+            end
+        end
+    }
+)
+myConfig:Register("AntiKill", AntiKillToggle)
+pcall(
+    function()
+        if Tab_Character and typeof(Tab_Character.Divider) == "function" then
+            Tab_Character:Divider()
+        end
+    end
+)
+pcall(
+    function()
+        if Tab_Character and typeof(Tab_Character.Section) == "function" then
+            Tab_Character:Section({Title = "Att:"})
+        end
+    end
+)
+local PickupToggle =
+    Tab_Character:Toggle(
+    {
+        Title = "Pickup items",
+        Default = false,
+        Callback = function(state)
+            sucking = state
+        end
+    }
+)
+myConfig:Register("PickupItems", PickupToggle)
+local AntiRagdollToggle =
+    Tab_Character:Toggle(
+    {
+        Title = "Anti Ragdoll",
+        Default = false,
+        Callback = function(state)
+            local _AntiRagdollEnabled = state
+            if not _AntiRagdollEnabled then
+                return
+            end
+            pcall(
+                function()
+                    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+                    local Players = game:GetService("Players")
+                    local player = Players.LocalPlayer
+                    local function findCounter()
+                        for _, obj in ipairs(getgc and getgc(true) or {}) do
+                            if typeof(obj) == "table" and rawget(obj, "event") and rawget(obj, "func") then
+                                return obj
+                            end
+                        end
+                        return nil
+                    end
+                    local CounterTable = findCounter()
+                    if not CounterTable then
+                        return
+                    end
+                    local function sendRemoteAction(action)
+                        CounterTable.event = (CounterTable.event or 0) + 1
+                        local SendRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Send")
+                        SendRemote:FireServer(CounterTable.event, action)
+                    end
+                    task.spawn(
+                        function()
+                            while _AntiRagdollEnabled do
+                                sendRemoteAction("end_ragdoll_early")
+                                task.wait(0.3)
+                                if not _AntiRagdollEnabled then
+                                    break
+                                end
+                                sendRemoteAction("clear_ragdoll")
+                                task.wait(0.3)
+                            end
+                        end
+                    )
+                end
+            )
+        end
+    }
+)
+myConfig:Register("AntiRagdoll", AntiRagdollToggle)
+local HideNameToggle =
+    Tab_Character:Toggle(
+    {
+        Title = "Hide Name",
+        Default = false,
+        Callback = function(state)
+            pcall(
+                function()
+                    local player = Players.LocalPlayer
+                    local character = player.Character or player.CharacterAdded:Wait()
+                    local hrp = character:WaitForChild("HumanoidRootPart")
+                    local gui = hrp:FindFirstChild("CharacterBillboardGui")
+                    if gui then
+                        local nameLabel = gui:FindFirstChild("PlayerName")
+                        if nameLabel and nameLabel:IsA("TextLabel") then
+                            nameLabel.Visible = not state
+                        end
+                    end
+                end
+            )
+        end
+    }
+)
+myConfig:Register("HideName", HideNameToggle)
+local AutoRespawnToggle =
+    Tab_Character:Toggle(
+    {
+        Title = "Auto Respawn",
+        Default = false,
+        Callback = function(state)
+            local _AutoRespawnEnabled = state
+            if not _AutoRespawnEnabled then
+                return
+            end
+            pcall(
+                function()
+                    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+                    local Players = game:GetService("Players")
+                    local player = Players.LocalPlayer
+                    local function findCounter()
+                        for _, obj in ipairs(getgc and getgc(true) or {}) do
+                            if typeof(obj) == "table" and rawget(obj, "event") and rawget(obj, "func") then
+                                return obj
+                            end
+                        end
+                        return nil
+                    end
+                    local CounterTable = findCounter()
+                    if not CounterTable then
+                        return
+                    end
+                    local function sendRemoteAction(action)
+                        CounterTable.event = (CounterTable.event or 0) + 1
+                        local SendRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Send")
+                        SendRemote:FireServer(CounterTable.event, action)
+                    end
+                    task.spawn(
+                        function()
+                            while _AutoRespawnEnabled do
+                                local char = player.Character
+                                local hum = char and char:FindFirstChildOfClass("Humanoid")
+                                if hum and hum.Health <= 0 then
+                                    task.wait(6.2)
+                                    if _AutoRespawnEnabled then
+                                        sendRemoteAction("death_screen_request_respawn")
+                                    end
+                                end
+                                task.wait(0.5)
+                            end
+                        end
+                    )
+                end
+            )
+        end
+    }
+)
+myConfig:Register("AutoRespawn", AutoRespawnToggle)
+Tab_Character:Divider()
+Tab_Character:Section({Title = "FOR PC HOLD (Z)"})
+local SnapToggle =
+    Tab_Character:Toggle(
+    {
+        Title = "Snap Under Map",
+        Default = false,
+        Callback = function(state)
+            featureEnabled = state
+            if featureEnabled then
+                startY = HumanoidRootPart and HumanoidRootPart.Position.Y or nil
+                teleportActive = true
+                performTeleport()
+            else
+                teleportActive = false
+                lockedY = nil
+                startY = nil
+            end
+        end
+    }
+)
+myConfig:Register("SnapUnderMap", SnapToggle)
+local SnapSlider =
+    Tab_Character:Slider(
+    {
+        Title = "Snap:",
+        Step = 1,
+        Value = {Min = 1, Max = 50, Default = 10},
+        Callback = function(value)
+            maxHeight = value
+            if teleportActive and HumanoidRootPart and startY then
+                local bottomPos =
+                    Vector3.new(HumanoidRootPart.Position.X, startY - maxHeight, HumanoidRootPart.Position.Z)
+                HumanoidRootPart.CFrame = CFrame.new(bottomPos)
+                lockedY = bottomPos.Y
+            end
+        end
+    }
+)
+myConfig:Register("SnapHeight", SnapSlider)
+local Tab_player = Window:Tab({Title = "PLAYER:", Icon = "person-standing"})
+Tab_player:Section({Title = "PLAYER:"})
+local Input =
+    Tab_player:Input(
+    {
+        Title = "Player Name:",
+        Desc = "Player name troll",
+        Value = "",
+        InputIcon = "user",
+        Type = "Input",
+        Placeholder = "",
+        Callback = function(input)
+            SelectedPlayer = input
+        end
+    }
+)
+myConfig:Register("PlayerNameInput", Input)
+local StartButton =
+    Tab_player:Button(
+    {
+        Title = "Start",
+        Desc = "Hold to Start troll",
+        Locked = false,
+        Callback = function()
+            if not SelectedPlayer or SelectedPlayer == "" then
+                return
+            end
+            ToggleBring(SelectedPlayer)
+        end
+    }
+)
+myConfig:Register("StartButton", StartButton)
+local StopButton =
+    Tab_player:Button(
+    {
+        Title = "Stop",
+        Desc = "Hold to Stop troll",
+        Locked = false,
+        Callback = function()
+            if Active then
+                Active = false
+                if BringConnection then
+                    BringConnection:Disconnect()
+                end
+            end
+        end
+    }
+)
+myConfig:Register("
