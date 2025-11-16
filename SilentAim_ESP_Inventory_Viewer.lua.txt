@@ -9,7 +9,6 @@ local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
 local Workspace = game:GetService("Workspace")
 local ContextActionService = game:GetService("ContextActionService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 -- =========================
 -- Local Player & Character
@@ -73,7 +72,6 @@ else
 end
 local ConfigManager = Window.ConfigManager
 local myConfig = ConfigManager:CreateConfig("MokunConfig")
-local TweenService = game:GetService("TweenService")
 local ScreenGui = Instance.new("ScreenGui")
 local OpenIcon = Instance.new("TextButton")
 local UICorner = Instance.new("UICorner")
@@ -163,6 +161,9 @@ pcall(
 )
 local CharModule = require(game.ReplicatedStorage.Modules.Core.Char)
 -- == Global Variables (Grouped by Feature) ==
+-- Cached values for performance
+local cachedViewportCenter = Vector2.new(0, 0)
+local lastViewportSize = Vector2.new(0, 0)
 -- Silent Aim
 local SilentAimEnabled = false
 local SilentAimAttachEnabled = false
@@ -183,6 +184,7 @@ local healthESPEnabled = false
 local highlightEnabled = false
 local highlights = {}
 local excludedPlayerNames = {} -- Table for excluded players
+local excludedPlayerNamesHash = {} -- Hash table for O(1) lookups
 -- Movement
 local walkSpeedEnabled = false
 local speedValue = 0.05
@@ -238,6 +240,9 @@ local WeaponDB = {}
 local BillboardCache = {}
 local ESPEnabled = false
 local ESPConnection = nil
+-- Cache for weapon info to avoid repeated lookups
+local weaponInfoCache = {}
+local meshIdCache = {}
 -- Counter Table for Remotes
 local CounterTable
 pcall(
@@ -263,8 +268,10 @@ local function getPing()
     return 0.2
 end
 local function isPlayerExcluded(playerName)
-    for _, excludedName in ipairs(excludedPlayerNames) do
-        if excludedName ~= "" and string.find(string.lower(playerName), string.lower(excludedName)) then
+    -- Use hash table for O(1) lookup instead of O(n) search
+    local lowerName = string.lower(playerName)
+    for excludedName, _ in pairs(excludedPlayerNamesHash) do
+        if string.find(lowerName, excludedName) then
             return true
         end
     end
@@ -273,7 +280,13 @@ end
 local function getClosestTarget()
     local closest = nil
     local shortestDistance = FOVRadius -- ใช้ FOV เป็นขอบเขต
-    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    -- Update cached viewport center only when viewport size changes
+    local currentViewportSize = Camera.ViewportSize
+    if lastViewportSize ~= currentViewportSize then
+        cachedViewportCenter = Vector2.new(currentViewportSize.X / 2, currentViewportSize.Y / 2)
+        lastViewportSize = currentViewportSize
+    end
+    local center = cachedViewportCenter
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             local head = player.Character:FindFirstChild("Head")
@@ -321,6 +334,13 @@ local function setupCharacter(char)
     Character = char
     Humanoid = char:WaitForChild("Humanoid")
     HumanoidRootPart = char:WaitForChild("HumanoidRootPart")
+    
+    -- Clear caches when character resets
+    weaponInfoCache = {}
+    meshIdCache = {}
+    shotgunCheckCache = {}
+    shotgunCheckTime = 0
+    
     if moveConnection then
         pcall(
             function()
@@ -417,20 +437,40 @@ local function NetGet(...)
     end
     return result
 end
+local lastPickupCheck = 0
+local lastPickupCleanup = 0
 local function CheckAndPickup()
     if not sucking then
         return
     end
+    -- Throttle to every 0.2 seconds instead of every frame
+    local now = tick()
+    if now - lastPickupCheck < 0.2 then
+        return
+    end
+    lastPickupCheck = now
+    
+    -- Clean up old entries every 30 seconds to prevent memory leaks
+    if now - lastPickupCleanup > 30 then
+        lastPickupCleanup = now
+        for item, time in pairs(lastPickupTimes) do
+            if not item or not item.Parent or now - time > 60 then
+                lastPickupTimes[item] = nil
+            end
+        end
+    end
+    
     local dropped = Workspace:FindFirstChild("DroppedItems")
     if not dropped then
         return
     end
+    local hrpPos = HumanoidRootPart.Position
     for _, item in ipairs(dropped:GetChildren()) do
         if item:IsA("Model") and item:FindFirstChildWhichIsA("BasePart") then
             local modelCF = item.GetPivot and item:GetPivot() or item:GetModelCFrame()
-            local distance = (HumanoidRootPart.Position - modelCF.Position).Magnitude
-            if distance <= 15 then
-                local now = tick()
+            local delta = modelCF.Position - hrpPos
+            local distSquared = delta.X * delta.X + delta.Y * delta.Y + delta.Z * delta.Z
+            if distSquared <= 225 then -- 15*15 = 225
                 local lastTime = lastPickupTimes[item] or 0
                 if now - lastTime >= 1.5 then
                     pcall(
@@ -510,15 +550,17 @@ local function getPlayersInRange(radius)
         return inRange
     end
     local pos = char.PrimaryPart.Position
+    local radiusSquared = radius * radius -- Compare squared distances to avoid sqrt
     for _, player in pairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character and player.Character.PrimaryPart then
-            local ok, mag =
+            local ok, distSquared =
                 pcall(
                 function()
-                    return (player.Character.PrimaryPart.Position - pos).Magnitude
+                    local delta = player.Character.PrimaryPart.Position - pos
+                    return delta.X * delta.X + delta.Y * delta.Y + delta.Z * delta.Z
                 end
             )
-            if ok and mag and mag <= radius then
+            if ok and distSquared and distSquared <= radiusSquared then
                 table.insert(inRange, player)
             end
         end
@@ -728,28 +770,50 @@ local function registerItems(folder)
     end
 end
 local function getMeshId(tool)
+    -- Check cache first
+    if meshIdCache[tool] then
+        return meshIdCache[tool]
+    end
+    
     local handle = tool:FindFirstChild("Handle")
     if not handle then
         return nil
     end
     local mesh = handle:FindFirstChildOfClass("SpecialMesh")
+    local meshId
     if mesh then
-        return mesh.MeshId .. (mesh.TextureId or "")
+        meshId = mesh.MeshId .. (mesh.TextureId or "")
+    elseif handle:IsA("MeshPart") then
+        meshId = handle.MeshId .. (handle.TextureID or "")
     end
-    if handle:IsA("MeshPart") then
-        return handle.MeshId .. (handle.TextureID or "")
+    
+    -- Cache the result
+    if meshId then
+        meshIdCache[tool] = meshId
     end
-    return nil
+    return meshId
 end
 local function getWeaponInfo(tool)
-    local meshId = getMeshId(tool)
-    if meshId and WeaponDB[meshId] then
-        return WeaponDB[meshId]
-    elseif WeaponDB[tool.Name] then
-        return WeaponDB[tool.Name]
-    else
-        return nil
+    -- Check cache first to avoid repeated lookups
+    if weaponInfoCache[tool] then
+        return weaponInfoCache[tool]
     end
+    
+    local meshId = getMeshId(tool)
+    local info
+    if meshId and WeaponDB[meshId] then
+        info = WeaponDB[meshId]
+    elseif WeaponDB[tool.Name] then
+        info = WeaponDB[tool.Name]
+    else
+        info = nil
+    end
+    
+    -- Cache the result
+    if info then
+        weaponInfoCache[tool] = info
+    end
+    return info
 end
 local function createBillboardForPlayer(player)
     if not ESPEnabled or player == LocalPlayer then
@@ -763,8 +827,15 @@ local function createBillboardForPlayer(player)
     if not hrp then
         return
     end
-    if BillboardCache[player] then
-        BillboardCache[player]:Destroy() -- ลบอันเก่าก่อนสร้างใหม่เพื่อป้องกันค้าง
+    -- Only recreate if billboard doesn't exist or parent changed
+    local existingBillboard = BillboardCache[player]
+    if existingBillboard and existingBillboard.Parent and existingBillboard.Adornee == hrp then
+        -- Billboard still valid, just update it
+        return
+    end
+    
+    if existingBillboard then
+        existingBillboard:Destroy()
         BillboardCache[player] = nil
     end
     local billboard = Instance.new("BillboardGui")
@@ -862,8 +933,17 @@ local function tryHoldPrompt(prompt, duration)
     )
     prompt:SetAttribute("__AutoFinishBusy", nil)
 end
+local lastPromptScan = 0
+local cachedPrompts = {}
 local function findFinishPrompts()
-    local found = {}
+    -- Cache prompts for 0.5 seconds to reduce workspace scanning
+    local now = tick()
+    if now - lastPromptScan < 0.5 and #cachedPrompts > 0 then
+        return cachedPrompts
+    end
+    lastPromptScan = now
+    cachedPrompts = {}
+    
     for _, char in pairs(workspace:GetChildren()) do
         local player = Players:GetPlayerFromCharacter(char)
         if player and not isPlayerExcluded(player.Name) then
@@ -872,12 +952,12 @@ local function findFinishPrompts()
                 local prompt = hrp:FindFirstChild("FinishPrompt")
                 if prompt then
                     setFinishPrompt(prompt)
-                    table.insert(found, prompt)
+                    table.insert(cachedPrompts, prompt)
                 end
             end
         end
     end
-    return found
+    return cachedPrompts
 end
 local function applyToAll()
     for _, p in ipairs(Players:GetPlayers()) do
@@ -1042,7 +1122,15 @@ local function createHighlight(character)
     highlight.Parent = character
     return highlight
 end
+local lastHighlightUpdate = 0
 local function updateHighlights()
+    -- Throttle updates to every 1 second
+    local now = tick()
+    if now - lastHighlightUpdate < 1 then
+        return
+    end
+    lastHighlightUpdate = now
+    
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             if not highlights[player] or not highlights[player].Parent then
@@ -1114,18 +1202,44 @@ local function createESP(player)
     for _, line in ipairs(lines) do
         table.insert(drawings, line)
     end
+    -- Cache previous visibility states to avoid unnecessary updates
+    local prevLineVisibility = {}
+    for i = 1, 12 do
+        prevLineVisibility[i] = false
+    end
+    local prevNameVisible = false
+    local prevDistVisible = false
+    local prevHealthVisible = false
+    local prevHighlightEnabled = false
+    
     local conn =
         RunService.RenderStepped:Connect(
         function()
             if not player or not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
-                for _, line in ipairs(lines) do
-                    line.Visible = false
+                -- Only update visibility if it was previously visible
+                for i, line in ipairs(lines) do
+                    if prevLineVisibility[i] then
+                        line.Visible = false
+                        prevLineVisibility[i] = false
+                    end
                 end
-                nameText.Visible = false
-                distanceText.Visible = false
-                healthBg.Visible = false
-                healthFg.Visible = false
-                highlight.Enabled = false
+                if prevNameVisible then
+                    nameText.Visible = false
+                    prevNameVisible = false
+                end
+                if prevDistVisible then
+                    distanceText.Visible = false
+                    prevDistVisible = false
+                end
+                if prevHealthVisible then
+                    healthBg.Visible = false
+                    healthFg.Visible = false
+                    prevHealthVisible = false
+                end
+                if prevHighlightEnabled then
+                    highlight.Enabled = false
+                    prevHighlightEnabled = false
+                end
                 return
             end
             if highlight and highlight.Parent and player.Character then
@@ -1166,14 +1280,29 @@ local function createESP(player)
                 end
             end
             if not hasFront then
-                for _, line in ipairs(lines) do
-                    line.Visible = false
+                for i, line in ipairs(lines) do
+                    if prevLineVisibility[i] then
+                        line.Visible = false
+                        prevLineVisibility[i] = false
+                    end
                 end
-                nameText.Visible = false
-                distanceText.Visible = false
-                healthBg.Visible = false
-                healthFg.Visible = false
-                highlight.Enabled = false
+                if prevNameVisible then
+                    nameText.Visible = false
+                    prevNameVisible = false
+                end
+                if prevDistVisible then
+                    distanceText.Visible = false
+                    prevDistVisible = false
+                end
+                if prevHealthVisible then
+                    healthBg.Visible = false
+                    healthFg.Visible = false
+                    prevHealthVisible = false
+                end
+                if prevHighlightEnabled then
+                    highlight.Enabled = false
+                    prevHighlightEnabled = false
+                end
                 return
             end
             local width = maxX - minX
@@ -1210,17 +1339,29 @@ local function createESP(player)
                             lines[i].To = Vector2.new(bx, by)
                             lines[i].Color = boxColor
                             lines[i].Thickness = thickness
-                            lines[i].Visible = true
+                            if not prevLineVisibility[i] then
+                                lines[i].Visible = true
+                                prevLineVisibility[i] = true
+                            end
                         else
-                            lines[i].Visible = false
+                            if prevLineVisibility[i] then
+                                lines[i].Visible = false
+                                prevLineVisibility[i] = false
+                            end
                         end
                     else
-                        lines[i].Visible = false
+                        if prevLineVisibility[i] then
+                            lines[i].Visible = false
+                            prevLineVisibility[i] = false
+                        end
                     end
                 end
             else
-                for _, line in ipairs(lines) do
-                    line.Visible = false
+                for i, line in ipairs(lines) do
+                    if prevLineVisibility[i] then
+                        line.Visible = false
+                        prevLineVisibility[i] = false
+                    end
                 end
             end
             local currentTopY = minY
@@ -1232,25 +1373,42 @@ local function createESP(player)
                 local healthX = width < minBarWidth and centerX - minBarWidth / 2 or minX
                 healthBg.Position = Vector2.new(healthX, currentTopY - barHeight - 2)
                 healthBg.Size = Vector2.new(barWidth, barHeight)
-                healthBg.Visible = true
+                if not prevHealthVisible then
+                    healthBg.Visible = true
+                end
                 healthFg.Position = Vector2.new(healthX, currentTopY - barHeight - 2)
                 healthFg.Size = Vector2.new(barWidth * perc, barHeight)
                 healthFg.Color = Color3.fromHSV(perc * 0.333, 0.5, 1)
-                healthFg.Visible = true
+                if not prevHealthVisible then
+                    healthFg.Visible = true
+                    prevHealthVisible = true
+                end
                 currentTopY = currentTopY - barHeight - 2
             else
-                healthBg.Visible = false
-                healthFg.Visible = false
+                if prevHealthVisible then
+                    healthBg.Visible = false
+                    healthFg.Visible = false
+                    prevHealthVisible = false
+                end
             end
             nameText.Text = nameESPEnabled and player.Name or ""
             nameText.Color =
                 isPlayerExcluded(player.Name) and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 255, 255)
             nameText.Position = Vector2.new(centerX, currentTopY - 16)
-            nameText.Visible = nameESPEnabled
+            if nameESPEnabled ~= prevNameVisible then
+                nameText.Visible = nameESPEnabled
+                prevNameVisible = nameESPEnabled
+            end
             distanceText.Text = distanceESPEnabled and string.format("%.0f studs", dist) or ""
             distanceText.Position = Vector2.new(centerX, maxY + 4)
-            distanceText.Visible = distanceESPEnabled
-            highlight.Enabled = highlightEnabled
+            if distanceESPEnabled ~= prevDistVisible then
+                distanceText.Visible = distanceESPEnabled
+                prevDistVisible = distanceESPEnabled
+            end
+            if highlightEnabled ~= prevHighlightEnabled then
+                highlight.Enabled = highlightEnabled
+                prevHighlightEnabled = highlightEnabled
+            end
         end
     )
     espPlayers[player] = {conn = conn, drawings = drawings}
@@ -1334,18 +1492,32 @@ else
     border.Parent = SilentFOVCircle
     SilentFOVCircle.Parent = ScreenGui
 end
+local shotgunCheckCache = {}
+local shotgunCheckTime = 0
 local function isShotgun()
+    -- Cache result for 0.5 seconds to avoid repeated attribute lookups
+    local now = tick()
+    if shotgunCheckCache.result and (now - shotgunCheckTime) < 0.5 then
+        return shotgunCheckCache.result
+    end
+    
     if not Character then
+        shotgunCheckCache.result = false
+        shotgunCheckTime = now
         return false
     end
     for _, tool in ipairs(Character:GetChildren()) do
         if tool:IsA("Tool") then
             local ammoType = tool:GetAttribute("AmmoType")
             if ammoType == "shotgun" or ammoType == "shootgun" then
+                shotgunCheckCache.result = true
+                shotgunCheckTime = now
                 return true
             end
         end
     end
+    shotgunCheckCache.result = false
+    shotgunCheckTime = now
     return false
 end
 local oldFire
@@ -1504,6 +1676,13 @@ RunService.RenderStepped:Connect(
     function()
         pcall(
             function()
+                -- Update cached viewport center once per frame
+                local currentViewportSize = Camera.ViewportSize
+                if lastViewportSize ~= currentViewportSize then
+                    cachedViewportCenter = Vector2.new(currentViewportSize.X / 2, currentViewportSize.Y / 2)
+                    lastViewportSize = currentViewportSize
+                end
+                
                 if SilentAimAttachEnabled then
                     CurrentTarget = getClosestTarget()
                 end
@@ -1513,7 +1692,7 @@ RunService.RenderStepped:Connect(
                         SilentFOVCircle.Position = UDim2.fromScale(0.5, 0.5)
                         SilentFOVCircle.Size = UDim2.fromOffset(FOVRadius * 2, FOVRadius * 2)
                     else
-                        SilentFOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+                        SilentFOVCircle.Position = cachedViewportCenter
                         SilentFOVCircle.Radius = FOVRadius
                     end
                 end
@@ -1522,11 +1701,10 @@ RunService.RenderStepped:Connect(
                     local targetHead = CurrentTarget.Character.Head
                     local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
                     if humanoid and humanoid.Health > 0 then
-                        local centerScreenPos = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2) -- Center of FOV circle
                         local targetScreenPos, targetOnScreen = Camera:WorldToViewportPoint(targetHead.Position)
                         if targetOnScreen then
                             Tracer.Visible = true
-                            Tracer.From = centerScreenPos -- Start from center of FOV circle
+                            Tracer.From = cachedViewportCenter -- Use cached center
                             Tracer.To = Vector2.new(targetScreenPos.X, targetScreenPos.Y)
                             Tracer.Color = Color3.fromRGB(255, 50, 50)
                         else
@@ -1552,9 +1730,10 @@ RunService.RenderStepped:Connect(
         )
     end
 )
--- Loops
+-- Loops - Consolidated into a single Heartbeat connection for better performance
 RunService.Heartbeat:Connect(
     function()
+        -- Sky feature
         if getgenv().Sky and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
             local Root = LocalPlayer.Character.HumanoidRootPart
             local originalVel = Root.Velocity
@@ -1565,33 +1744,28 @@ RunService.Heartbeat:Connect(
             RunService.RenderStepped:Wait()
             Root.Velocity = originalVel
         end
-    end
-)
-RunService.Heartbeat:Connect(
-    function()
-        if not enabled then
-            return
-        end
-        if isDowned() then
-            local hrp = getHRP()
-            if hrp and not undergroundBaseCFrame then
-                teleportUnderground()
-            end
-            flickerAndMove()
-        else
-            if undergroundBaseCFrame then
+        
+        -- Anti-kill feature
+        if enabled then
+            if isDowned() then
                 local hrp = getHRP()
-                if hrp then
-                    hrp.CFrame = undergroundBaseCFrame + Vector3.new(0, -DROP_DEPTH, 0)
+                if hrp and not undergroundBaseCFrame then
+                    teleportUnderground()
                 end
+                flickerAndMove()
+            else
+                if undergroundBaseCFrame then
+                    local hrp = getHRP()
+                    if hrp then
+                        hrp.CFrame = undergroundBaseCFrame + Vector3.new(0, -DROP_DEPTH, 0)
+                    end
+                end
+                undergroundBaseCFrame = nil
+                flickering = false
             end
-            undergroundBaseCFrame = nil
-            flickering = false
         end
-    end
-)
-RunService.Heartbeat:Connect(
-    function()
+        
+        -- Character and pickup check
         if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
             Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
             HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
@@ -1876,8 +2050,12 @@ local FriendsInput =
         Placeholder = "",
         Callback = function(input)
             excludedPlayerNames = {}
+            excludedPlayerNamesHash = {}
             for name in string.gmatch(input, "%S+") do
-                table.insert(excludedPlayerNames, name)
+                if name ~= "" then
+                    table.insert(excludedPlayerNames, name)
+                    excludedPlayerNamesHash[string.lower(name)] = true
+                end
             end
             for _, player in pairs(Players:GetPlayers()) do
                 if espPlayers[player] and espPlayers[player].drawings then
@@ -2136,12 +2314,18 @@ local ItemsESPToggle =
                         createBillboardForPlayer(p)
                     end
                 end
+                -- Throttle updates to every 0.5 seconds instead of every frame
+                local lastUpdate = 0
                 ESPConnection =
                     RunService.Heartbeat:Connect(
                     function()
-                        for _, p in ipairs(Players:GetPlayers()) do
-                            if p ~= LocalPlayer and p.Character then
-                                createBillboardForPlayer(p)
+                        local now = tick()
+                        if now - lastUpdate >= 0.5 then
+                            lastUpdate = now
+                            for _, p in ipairs(Players:GetPlayers()) do
+                                if p ~= LocalPlayer and p.Character then
+                                    createBillboardForPlayer(p)
+                                end
                             end
                         end
                     end
