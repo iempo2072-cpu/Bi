@@ -174,6 +174,9 @@ Tracer.Thickness = 1
 Tracer.Color = Color3.fromRGB(255, 50, 50)
 Tracer.Transparency = 1
 Tracer.Visible = false
+-- HeadCircle System
+local HeadCircleEnabled = false
+local HeadCircleBillboard = nil
 -- ESP
 local espPlayers = {}
 local boxESPEnabled = false
@@ -300,7 +303,57 @@ end
 local function predictPosition(head, hrp)
     local ping = getPing()
     local velocity = hrp and hrp.Velocity or Vector3.zero
-    return head.Position + (velocity * ping * 1.15)
+    local BulletSpeed = 8000
+    local distance = (head.Position - (LocalPlayer.Character and LocalPlayer.Character.Head.Position or Vector3.zero)).Magnitude
+    local travelTime = distance / BulletSpeed
+    return head.Position + (velocity * (ping + travelTime))
+end
+local function BulletEffect(startPos, endPos)
+    pcall(function()
+        local distance = (endPos - startPos).Magnitude
+        local beam = Instance.new("Part")
+        beam.Anchored = true
+        beam.CanCollide = false
+        beam.Size = Vector3.new(0.1, 0.1, distance)
+        beam.CFrame = CFrame.new(startPos, endPos) * CFrame.new(0, 0, -distance / 2)
+        beam.Material = Enum.Material.Neon
+        beam.BrickColor = BrickColor.new("Bright yellow")
+        beam.Transparency = 0.3
+        beam.Parent = Workspace
+        Debris:AddItem(beam, 0.5)
+    end)
+end
+local function updateHeadCircle()
+    if HeadCircleEnabled and CurrentTarget and CurrentTarget.Character then
+        local head = CurrentTarget.Character:FindFirstChild("Head")
+        if head then
+            if not HeadCircleBillboard or not HeadCircleBillboard.Parent then
+                -- Create new billboard
+                HeadCircleBillboard = Instance.new("BillboardGui")
+                HeadCircleBillboard.Size = UDim2.new(2, 0, 2, 0)
+                HeadCircleBillboard.StudsOffset = Vector3.new(0, 1, 0)
+                HeadCircleBillboard.AlwaysOnTop = true
+                HeadCircleBillboard.Adornee = head
+                
+                local circle = Instance.new("ImageLabel")
+                circle.Size = UDim2.new(1, 0, 1, 0)
+                circle.BackgroundTransparency = 1
+                circle.Image = "rbxassetid://7072725488"
+                circle.ImageColor3 = Color3.fromRGB(0, 255, 0)
+                circle.Parent = HeadCircleBillboard
+                
+                HeadCircleBillboard.Parent = head
+            else
+                HeadCircleBillboard.Adornee = head
+            end
+        end
+    else
+        -- Remove billboard if conditions not met
+        if HeadCircleBillboard and HeadCircleBillboard.Parent then
+            HeadCircleBillboard:Destroy()
+            HeadCircleBillboard = nil
+        end
+    end
 end
 local function isBehindWall(startPos, endPos)
     if not startPos or not endPos then
@@ -596,6 +649,8 @@ local function AttackNearby()
             )
             if okLocalPos and okEnemyPos and localPos and enemyPos then
                 local lookAtCFrame = CFrame.lookAt(localPos, enemyPos)
+                -- Create bullet effect
+                BulletEffect(localPos, enemyPos)
                 local args = {
                     "melee_attack",
                     tool,
@@ -1363,6 +1418,7 @@ if Remote and Remote.FireServer then
 			local displacement = aimPos - head.Position
 			local hitCFrame = CurrentTarget.Character:GetPivot() + displacement
 			local previousHealth = humanoid.Health
+			local myPos = LocalPlayer.Character and LocalPlayer.Character.Head and LocalPlayer.Character.Head.Position or Vector3.zero
 
 			-- Check if target is behind a wall (calculated but not used for conditional logic in original; kept for potential future use)
 			local isObstructed = isBehindWall(LocalPlayer.Character.Head.Position, aimPos)
@@ -1472,6 +1528,8 @@ RunService.RenderStepped:Connect(
                     end
                 end
                 CurrentTarget = (SilentAimEnabled or SilentAimAttachEnabled) and getClosestTarget() or nil
+                -- Update HeadCircle
+                updateHeadCircle()
                 if CurrentTarget and CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("Head") then
                     local targetHead = CurrentTarget.Character.Head
                     local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
@@ -1765,8 +1823,8 @@ task.spawn(
 )
 loadESP()
 -- == UI Tabs ==
-local Tab = Window:Tab({Title = "COMBAT:", Icon = "crosshair"})
-Tab:Section({Title = "GUN:"})
+local Tab = Window:Tab({Title = "Aimbot", Icon = "crosshair"})
+Tab:Section({Title = "Silent Aim Settings"})
 local SilentToggle =
     Tab:Toggle(
     {
@@ -1844,12 +1902,28 @@ local FriendsInput =
     }
 )
 myConfig:Register("FriendsList", FriendsInput)
+Tab:Section({Title = "Head Circle"})
+local HeadCircleToggle =
+    Tab:Toggle(
+    {
+        Title = "Show Head Circle",
+        Default = false,
+        Callback = function(state)
+            HeadCircleEnabled = state
+            if not state and HeadCircleBillboard then
+                HeadCircleBillboard:Destroy()
+                HeadCircleBillboard = nil
+            end
+        end
+    }
+)
+myConfig:Register("HeadCircle", HeadCircleToggle)
 pcall(
     function()
         Tab:Divider()
     end
 )
-Tab:Section({Title = "COMBAT:"})
+Tab:Section({Title = "Combat"})
 local FistsToggle =
     Tab:Toggle(
     {
@@ -1914,10 +1988,9 @@ local HitAuraToggle =
     }
 )
 myConfig:Register("HitAura", HitAuraToggle)
-local Tab_mods = Window:Tab({Title = "WEAPON:", Icon = "layers"})
-Tab_mods:Section({Title = "MODS:"})
+Tab:Section({Title = "Weapon Mods"})
 local FastShootButton =
-    Tab_mods:Button(
+    Tab:Button(
     {
         Title = "Fast Shoot (No Recoil)",
         Default = false,
@@ -1981,7 +2054,7 @@ local FastShootButton =
     }
 )
 myConfig:Register("FastShoot", FastShootButton)
-local Tab_ESP = Window:Tab({Title = "ESP:", Icon = "eye"})
+local Tab_ESP = Window:Tab({Title = "ESP", Icon = "eye"})
 Tab_ESP:Section({Title = "ESP:"})
 local BoxESPToggle =
     Tab_ESP:Toggle(
@@ -2132,8 +2205,8 @@ local ItemsESPToggle =
     }
 )
 myConfig:Register("ItemsESP", ItemsESPToggle)
-local Tab_Character = Window:Tab({Title = "CHARACTER:", Icon = "user"})
-Tab_Character:Section({Title = "CHARACTER:"})
+local Tab_Character = Window:Tab({Title = "Movement", Icon = "user"})
+Tab_Character:Section({Title = "Movement Settings"})
 local WalkSpeedToggle =
     Tab_Character:Toggle(
     {
@@ -2534,10 +2607,11 @@ local SnapSlider =
     }
 )
 myConfig:Register("SnapHeight", SnapSlider)
-local Tab_player = Window:Tab({Title = "PLAYER:", Icon = "person-standing"})
-Tab_player:Section({Title = "PLAYER:"})
+-- Tab MISC
+local Tab_misc = Window:Tab({Title = "Misc", Icon = "warehouse"})
+Tab_misc:Section({Title = "Player Actions"})
 local Input =
-    Tab_player:Input(
+    Tab_misc:Input(
     {
         Title = "Player Name:",
         Desc = "Player name troll",
@@ -2552,7 +2626,7 @@ local Input =
 )
 myConfig:Register("PlayerNameInput", Input)
 local StartButton =
-    Tab_player:Button(
+    Tab_misc:Button(
     {
         Title = "Start",
         Desc = "Hold to Start troll",
@@ -2567,7 +2641,7 @@ local StartButton =
 )
 myConfig:Register("StartButton", StartButton)
 local StopButton =
-    Tab_player:Button(
+    Tab_misc:Button(
     {
         Title = "Stop",
         Desc = "Hold to Stop troll",
@@ -2589,9 +2663,9 @@ local Attachment1 = Instance.new("Attachment", CorePart)
 CorePart.Anchored = true
 CorePart.CanCollide = false
 CorePart.Transparency = 1
-Tab_player:Divider()
+Tab_misc:Divider()
 local AutoFinnishToggle =
-    Tab_player:Toggle(
+    Tab_misc:Toggle(
     {
         Title = "Auto Finnish",
         Default = false,
@@ -2611,14 +2685,12 @@ local AutoFinnishToggle =
     }
 )
 myConfig:Register("AutoFinnish", AutoFinnishToggle)
--- Tab BUY
-local Tab_buyer = Window:Tab({Title = "BUY:", Icon = "landmark"})
-Tab_buyer:Section({Title = "BUY:"})
+Tab_misc:Section({Title = "Shop & Crates"})
 local function safeToggle(title, desc, key, callback)
     pcall(
         function()
             local ToggleElement =
-                Tab_buyer:Toggle(
+                Tab_misc:Toggle(
                 {
                     Title = title,
                     Desc = desc,
@@ -2649,8 +2721,7 @@ safeToggle(
     end
 )
 myConfig:Register("SkipCrate", SkipCrateToggle)
--- Tab MISC
-local Tab_misc = Window:Tab({Title = "MISC:", Icon = "warehouse"})
+Tab_misc:Section({Title = "Quests"})
 -- ปุ่ม Claim All Quest
 local ClaimAllQuestButton =
     Tab_misc:Button(
