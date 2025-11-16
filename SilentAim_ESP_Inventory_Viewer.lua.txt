@@ -1,6 +1,6 @@
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
--- เน€เธเธญเธฃเนเธงเธดเธช
+--เซอร์
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -13,10 +13,12 @@ local LocalPlayer = Players.LocalPlayer
 local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local Humanoid = Character:WaitForChild("Humanoid")
 local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+
+local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
 
 local Window = WindUI:CreateWindow({
-    Title = "Yomo HUB ๐ง‘โ€๐’ป | v2  | ",
+    Title = "Yomo HUB 🧑‍💻 | v2  | ",
     Icon = "menu",
     Author = "https://discord.gg/xWW3jhKM",
     Folder = "KungHubkFolder",
@@ -43,10 +45,11 @@ local SilentAimEnabled = false
 local FOVRadius = 120
 local CurrentTarget = nil
 
--- เธเธตเน€เธเธญเธฃเนเนเธซเธกเน
-local DirectShotEnabled = false      -- เธขเธดเธเธ•เธฃเธ (toggle)
-local BulletSpeed = 4000             -- เธเธงเธฒเธกเน€เธฃเนเธงเธเธฃเธฐเธชเธธเธ (default 4000)
-local AntiRecoilEnabled = false      -- เธเธฑเธเธเธทเธเธ”เธตเธ” (toggle)
+-- ตัวแปรความเร็วกระสุน (units per second)
+local bulletSpeed = 4000 -- ตั้งค่าเป็น 4000 ตามที่ขอ
+
+-- เพิ่มตัวเลือกยิงตรงโมเดล
+local AimAtModelEnabled = false -- ถ้า true จะยิงที่ HumanoidRootPart / PrimaryPart แทนหัว
 
 local SilentFOVCircle = Drawing.new("Circle")
 SilentFOVCircle.Color = Color3.fromRGB(255, 255, 0)
@@ -64,7 +67,7 @@ Tracer.Transparency = 1
 Tracer.Visible = false
 
 local function getPing()
-	local stats = LocalPlayer:FindFirstChild("PlayerGui") and LocalPlayer.PlayerGui:FindFirstChild("NetworkStats")
+	local stats = LocalPlayer:FindFirstChild("PlayerGui"):FindFirstChild("NetworkStats")
 	if stats then
 		local pingText = stats:FindFirstChild("PingLabel")
 		if pingText then
@@ -95,13 +98,10 @@ local function getClosestTarget()
 					local dot = forward:Dot(toTarget)
 
 					if dot > 0.5 then
-						local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-						if myHead then
-							local distance3D = (head.Position - myHead.Position).Magnitude
-							if distance3D < shortestDistance then
-								shortestDistance = distance3D
-								closest = player
-							end
+						local distance3D = (head.Position - LocalPlayer.Character.Head.Position).Magnitude
+						if distance3D < shortestDistance then
+							shortestDistance = distance3D
+							closest = player
 						end
 					end
 				end
@@ -112,10 +112,33 @@ local function getClosestTarget()
 	return closest
 end
 
-local function predictPosition(head, hrp)
+-- ปรับให้ predict รองรับการคำนวณจากชิ้นส่วนใดก็ได้ (Head หรือ HumanoidRootPart/PrimaryPart)
+local function predictPosition(part)
+	-- part คาดว่าจะเป็น BasePart หรือ object ที่มี Position และอาจมี Velocity
 	local ping = getPing()
-	local velocity = hrp and hrp.Velocity or Vector3.zero
-	return head.Position + (velocity * ping * 1.15)
+	local originHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+	if not originHead or not part then
+		return part and part.Position or Vector3.new()
+	end
+
+	local distance = (part.Position - originHead.Position).Magnitude
+	local travelTime = 0
+	if bulletSpeed > 0 then
+		travelTime = distance / bulletSpeed
+	end
+
+	-- factor เล็กน้อยสำหรับความไม่แน่นอนของ ping/lag
+	local leadTime = (ping + travelTime) * 1.15
+
+	local velocity = Vector3.new(0,0,0)
+	-- ถ้า part มี velocity ให้ใช้ ถ้าไม่มี ใช้ velocity ของ HumanoidRootPart ของตัวเป้าหมายถ้ามี
+	if part:IsA("BasePart") then
+		velocity = part.Velocity or Vector3.new(0,0,0)
+	elseif part.Parent and part.Parent:FindFirstChild("HumanoidRootPart") then
+		velocity = part.Parent.HumanoidRootPart.Velocity or Vector3.new(0,0,0)
+	end
+
+	return part.Position + (velocity * leadTime)
 end
 
 RunService.RenderStepped:Connect(function()
@@ -129,13 +152,21 @@ RunService.RenderStepped:Connect(function()
 		CurrentTarget = nil
 	end
 
-	if CurrentTarget and CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("Head") then
-		local targetHead = CurrentTarget.Character.Head
+	if CurrentTarget and CurrentTarget.Character then
+		local targetHead = CurrentTarget.Character:FindFirstChild("Head")
+		local targetHRP = CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
+		local targetPart = nil
+		if AimAtModelEnabled then
+			targetPart = targetHRP or (CurrentTarget.Character.PrimaryPart and CurrentTarget.Character.PrimaryPart) or targetHead
+		else
+			targetPart = targetHead or targetHRP or (CurrentTarget.Character.PrimaryPart and CurrentTarget.Character.PrimaryPart)
+		end
+
 		local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
         local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
-		if myHead then
+		if myHead and targetPart then
 			local myScreenPos, myOnScreen = Camera:WorldToViewportPoint(myHead.Position)
-			local targetScreenPos, targetOnScreen = Camera:WorldToViewportPoint(targetHead.Position)
+			local targetScreenPos, targetOnScreen = Camera:WorldToViewportPoint(targetPart.Position)
 			if myOnScreen and targetOnScreen then
 				Tracer.Visible = true
 				Tracer.From = Vector2.new(myScreenPos.X, myScreenPos.Y)
@@ -160,150 +191,179 @@ local function isBehindWall(startPos, endPos)
 	return hit ~= nil
 end
 
-local Remote = ReplicatedStorage.Remotes:FindFirstChild("Send")
-if not Remote then
-	warn("Remote 'Send' not found in ReplicatedStorage.Remotes")
-end
+local Remote = ReplicatedStorage.Remotes.Send
 
--- Hook เธเธฒเธฃเธชเนเธ Remote (เนเธเน args เธชเธณเธซเธฃเธฑเธ shoot_gun)
 local oldFire
-if Remote and Remote.FireServer then
-	oldFire = hookfunction(Remote.FireServer, function(self, ...)
-	    if self ~= Remote then
-	        return oldFire(self, ...)
-	    end
-		local args = {...}
-		if SilentAimEnabled and args[2] == "shoot_gun" and CurrentTarget then
-			local head = CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("Head")
-			local hrp = CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
-			local humanoid = CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("Humanoid")
-			if head and humanoid and hrp then
-				local aimPos = predictPosition(head, hrp)
-				local displacement = aimPos - head.Position
-				local hitCFrame = CurrentTarget.Character:GetPivot() + displacement
-				local previousHealth = humanoid.Health
+oldFire = hookfunction(Remote.FireServer, function(self, ...)
+    if self ~= Remote then
+        return oldFire(self, ...)
+    end
+	local args = {...}
+	if SilentAimEnabled and args[2] == "shoot_gun" and CurrentTarget and CurrentTarget.Character then
+		local head = CurrentTarget.Character:FindFirstChild("Head")
+		local hrp = CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
+		local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
 
-				-- Check obstruction (เธขเธฑเธเนเธกเนเนเธเนเน€เธเธทเนเธญเธเนเธเธ•เธฑเธ”)
-				local isObstructed = isBehindWall(LocalPlayer.Character.Head.Position, aimPos)
+		local targetPart = nil
+		if AimAtModelEnabled then
+			targetPart = hrp or (CurrentTarget.Character.PrimaryPart and CurrentTarget.Character.PrimaryPart) or head
+		else
+			targetPart = head or hrp or (CurrentTarget.Character.PrimaryPart and CurrentTarget.Character.PrimaryPart)
+		end
 
-				-- เน€เธเนเธเธชเธ เธฒเธเธเธฅเนเธญเธเธเนเธญเธเธขเธดเธ เธ–เนเธฒเน€เธเธดเธ” Anti-Recoil
-				local preCam = nil
-				if AntiRecoilEnabled then
-					pcall(function() preCam = Camera.CFrame end)
-				end
+		if targetPart and humanoid then
+			local aimPos = predictPosition(targetPart)
+			local displacement = aimPos - targetPart.Position
+			local hitCFrame = CurrentTarget.Character:GetPivot() + displacement
+			local previousHealth = humanoid.Health
 
-				-- เธ–เนเธฒเน€เธเธดเธ” DirectShot เธเธฐเนเธชเนเธ•เธณเนเธซเธเนเธเธเธฒเธฃเธขเธดเธเธฅเธเนเธ args (เนเธเธฃเธเธชเธฃเนเธฒเธ args เธญเธฒเธเธ•เนเธฒเธเธเธฑเธเนเธเน€เธเธกเธญเธทเนเธ)
-				if DirectShotEnabled then
-					if type(args[5]) == "table" and args[5][1] and args[5][1][1] then
-						args[5][1][1]["Position"] = aimPos
-					else
-						args[5] = {
-							[1] = {
-								[1] = {
-									["Instance"] = head,
-									["Normal"] = Vector3.new(0, 1, 0),
-									["Position"] = aimPos
-								}
-							}
-						}
+			-- Check if target is behind a wall (calculated but not used for conditional logic in original; kept for potential future use)
+			local isObstructed = isBehindWall(LocalPlayer.Character.Head.Position, aimPos)
+
+			args[4] = CFrame.new(math.huge, math.huge, math.huge)
+
+			args[5] = {
+				[1] = {
+					[1] = {
+						["Instance"] = targetPart,
+						["Normal"] = Vector3.new(0, 1, 0),
+						["Position"] = aimPos
+					}
+				}
+			}
+
+			local beam = Instance.new("Part")
+			beam.Anchored = true
+			beam.CanCollide = false
+			beam.Size = Vector3.new(0.15, 0.15, (aimPos - LocalPlayer.Character.Head.Position).Magnitude)
+			beam.CFrame = CFrame.new(LocalPlayer.Character.Head.Position, aimPos) * CFrame.new(0, 0, -beam.Size.Z/2)
+			beam.Material = Enum.Material.Neon
+			beam.Transparency = 0.25
+			beam.Parent = workspace
+			-- ปรับเวลาลบ beam ให้สัมพันธ์กับระยะทางและความเร็วกระสุน (ไม่เกิน 4 วินาทีเดิม)
+			local travelTimeForBeam = 0
+			if bulletSpeed > 0 then
+				travelTimeForBeam = (aimPos - LocalPlayer.Character.Head.Position).Magnitude / bulletSpeed
+			end
+			Debris:AddItem(beam, math.clamp(travelTimeForBeam + 0.2, 0.25, 4))
+
+			spawn(function()
+				wait(0.1)
+				if humanoid and humanoid.Health < previousHealth then
+					beam.Color = Color3.fromRGB(0, 255, 0)
+
+					local targetCharacter = CurrentTarget.Character
+					local clone = targetCharacter:Clone()
+					clone.Name = "HitGhost"
+					clone.PrimaryPart = clone:FindFirstChild("HumanoidRootPart")
+
+					for _, child in ipairs(clone:GetChildren()) do
+						if child:IsA("Humanoid") or child:IsA("Script") or child:IsA("LocalScript") then
+							child:Destroy()
+						end
 					end
-					args[4] = CFrame.new(aimPos)
-				else
-					-- เธเธญเธเน€เธ”เธดเธก: เธ•เธฑเนเธเน€เธเนเธ เนเธfty เน€เธเธทเนเธญเนเธกเนเนเธซเนเธฃเธฐเธเธธเธ•เธณเนเธซเธเนเธ
-					args[4] = CFrame.new(math.huge, math.huge, math.huge)
-				end
 
-				-- เธ•เธฑเนเธเธเธงเธฒเธกเน€เธฃเนเธงเธเธฃเธฐเธชเธธเธ (เธงเธฒเธเนเธงเนเธ—เธตเน args[6] เน€เธเนเธเธเนเธฒเน€เธฃเธดเนเธกเธ•เนเธ)
-				args[6] = BulletSpeed
+					for _, descendant in ipairs(clone:GetDescendants()) do
+						if descendant:IsA("BasePart") then
+							descendant.Anchored = true
+							descendant.CanCollide = false
+							descendant.Material = Enum.Material.Neon
+							descendant.Color = Color3.fromRGB(128, 0, 128)
+							descendant.Transparency = 0.5
+						elseif descendant:IsA("Decal") or descendant:IsA("Texture") then
+							descendant:Destroy()
+						end
+					end
 
-				-- เธงเธฒเธ” beam เน€เธเนเธ visual เธเธฑเนเธงเธเธฃเธฒเธง
-				local beam = Instance.new("Part")
-				beam.Anchored = true
-				beam.CanCollide = false
-				beam.Size = Vector3.new(0.15, 0.15, (aimPos - (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head") and LocalPlayer.Character.Head.Position or Vector3.new())).Magnitude)
-				if beam.Size.Z == 0 then beam.Size = Vector3.new(0.15,0.15,1) end
-				beam.CFrame = CFrame.new(LocalPlayer.Character.Head.Position, aimPos) * CFrame.new(0, 0, -beam.Size.Z/2)
-				beam.Material = Enum.Material.Neon
-				beam.Transparency = 0.25
-				beam.Parent = workspace
-				Debris:AddItem(beam, 4)
+					local highlight = Instance.new("Highlight")
+					highlight.OutlineColor = Color3.fromRGB(128, 0, 128)
+					highlight.FillColor = Color3.fromRGB(128, 0, 128)
+					highlight.OutlineTransparency = 0
+					highlight.FillTransparency = 0.7
+					highlight.Parent = clone
 
-				spawn(function()
-					wait(0.1)
-					if humanoid and humanoid.Health < previousHealth then
-						beam.Color = Color3.fromRGB(0, 255, 0)
-						-- effect เนเธชเธ”เธเธเธฒเธฃเนเธ”เธ
-						local targetCharacter = CurrentTarget.Character
-						local clone = targetCharacter:Clone()
-						clone.Name = "HitGhost"
-						clone.PrimaryPart = clone:FindFirstChild("HumanoidRootPart")
+					clone:SetPivot(hitCFrame)
+					clone.Parent = workspace
 
-						for _, child in ipairs(clone:GetChildren()) do
+					local tweenInfo = TweenInfo.new(1, Enum.EasingStyle.Linear)
+					local partGoals = {Transparency = 1}
+					local highlightGoals = {OutlineTransparency = 1, FillTransparency = 1}
+
+					for _, descendant in ipairs(clone:GetDescendants()) do
+						if descendant:IsA("BasePart") then
+							TweenService:Create(descendant, tweenInfo, partGoals):Play()
+						end
+					end
+					TweenService:Create(highlight, tweenInfo, highlightGoals):Play()
+
+					Debris:AddItem(clone, 2)
+
+					if LocalPlayer and LocalPlayer.Character then
+
+						local hitBox = Instance.new("Part")
+						hitBox.Size = Vector3.new(1.2, 1.2, 1.2)
+						hitBox.Anchored = true
+						hitBox.CanCollide = false
+						hitBox.Material = Enum.Material.Neon
+						hitBox.Color = Color3.fromRGB(128, 0, 128)
+						hitBox.CFrame = CFrame.new(aimPos)
+						hitBox.Parent = workspace
+
+						local playerClone = LocalPlayer.Character:Clone()
+						playerClone.Name = "PlayerHitClone"
+
+						for _, child in ipairs(playerClone:GetChildren()) do
 							if child:IsA("Humanoid") or child:IsA("Script") or child:IsA("LocalScript") then
 								child:Destroy()
 							end
 						end
 
-						for _, descendant in ipairs(clone:GetDescendants()) do
+						for _, descendant in ipairs(playerClone:GetDescendants()) do
 							if descendant:IsA("BasePart") then
 								descendant.Anchored = true
 								descendant.CanCollide = false
 								descendant.Material = Enum.Material.Neon
 								descendant.Color = Color3.fromRGB(128, 0, 128)
-								descendant.Transparency = 0.5
+								descendant.Transparency = 0.6
 							elseif descendant:IsA("Decal") or descendant:IsA("Texture") then
 								descendant:Destroy()
 							end
 						end
 
-						local highlight = Instance.new("Highlight")
-						highlight.OutlineColor = Color3.fromRGB(128, 0, 128)
-						highlight.FillColor = Color3.fromRGB(128, 0, 128)
-						highlight.OutlineTransparency = 0
-						highlight.FillTransparency = 0.7
-						highlight.Parent = clone
+						if playerClone:FindFirstChild("HumanoidRootPart") then
+							pcall(function()
+								playerClone.PrimaryPart = playerClone:FindFirstChild("HumanoidRootPart")
+								playerClone:SetPrimaryPartCFrame(CFrame.new(aimPos))
+							end)
+						else
 
-						clone:SetPivot(hitCFrame)
-						clone.Parent = workspace
+							playerClone:SetPivot(CFrame.new(aimPos))
+						end
 
-						local tweenInfo = TweenInfo.new(1, Enum.EasingStyle.Linear)
-						local partGoals = {Transparency = 1}
-						local highlightGoals = {OutlineTransparency = 1, FillTransparency = 1}
+						playerClone.Parent = workspace
 
-						for _, descendant in ipairs(clone:GetDescendants()) do
+						local fadeTweenInfo = TweenInfo.new(1.8, Enum.EasingStyle.Linear)
+						local hitBoxGoals = {Transparency = 1}
+						TweenService:Create(hitBox, fadeTweenInfo, hitBoxGoals):Play()
+
+						for _, descendant in ipairs(playerClone:GetDescendants()) do
 							if descendant:IsA("BasePart") then
-								TweenService:Create(descendant, tweenInfo, partGoals):Play()
+								TweenService:Create(descendant, fadeTweenInfo, {Transparency = 1}):Play()
 							end
 						end
-						TweenService:Create(highlight, tweenInfo, highlightGoals):Play()
 
-						Debris:AddItem(clone, 2)
-					else
-						beam.Color = Color3.fromRGB(255, 0, 0)
+						Debris:AddItem(hitBox, 2)
+						Debris:AddItem(playerClone, 2)
 					end
-				end)
-
-				-- เน€เธฃเธตเธขเธ remote เธเธญเธเน€เธ”เธดเธกเธเธฑเธ args เธ—เธตเนเนเธเนเนเธ
-				local result = oldFire(self, unpack(args))
-
-				-- restore camera เน€เธฅเนเธเธเนเธญเธข เน€เธเธทเนเธญเธเธ”เน€เธเธข recoil เธ–เนเธฒเน€เธเธดเธ”
-				if AntiRecoilEnabled and preCam then
-					spawn(function()
-						wait(0.03)
-						pcall(function() Camera.CFrame = preCam end)
-					end)
+				else
+					beam.Color = Color3.fromRGB(255, 0, 0)
 				end
-
-				return result
-			end
+			end)
 		end
-		return oldFire(self, unpack(args))
-	end)
-else
-	warn("Unable to hook Remote.FireServer")
-end
+	end
+	return oldFire(self, unpack(args))
+end)
 
--- UI Controls เธชเธณเธซเธฃเธฑเธ Silent Aim (เธฃเธงเธก Direct Shot, Bullet Speed, Anti-Recoil)
 Tab:Toggle({
 	Title = "Silent Aim",
 	Default = false,
@@ -312,43 +372,12 @@ Tab:Toggle({
 	end
 })
 
+-- Toggle เพิ่มสำหรับ Aim at Model
 Tab:Toggle({
-	Title = "Direct Shot",
+	Title = "Aim At Model (HRP/PrimaryPart)",
 	Default = false,
 	Callback = function(state)
-		DirectShotEnabled = state
-		if state then
-			WindUI:Notify({Title="Direct Shot Enabled", Description="เธขเธดเธเธ•เธฃเธเน€เธเธดเธ”เนเธฅเนเธง", Duration=2})
-		else
-			WindUI:Notify({Title="Direct Shot Disabled", Description="เธขเธดเธเธ•เธฃเธเธเธดเธ”เนเธฅเนเธง", Duration=2})
-		end
-	end
-})
-
-Tab:Slider({
-    Title = "Bullet Speed",
-    Step = 1,
-    Value = {
-        Min = 100,
-        Max = 10000,
-        Default = BulletSpeed,
-    },
-    Callback = function(value)
-        BulletSpeed = tonumber(value) or 4000
-        print("BulletSpeed", BulletSpeed)
-    end
-})
-
-Tab:Toggle({
-	Title = "Anti-Recoil",
-	Default = false,
-	Callback = function(state)
-		AntiRecoilEnabled = state
-		if state then
-			WindUI:Notify({Title="Anti-Recoil Enabled", Description="เธเธฑเธเธเธทเธเธ”เธตเธ”เน€เธเธดเธ”เนเธฅเนเธง", Duration=2})
-		else
-			WindUI:Notify({Title="Anti-Recoil Disabled", Description="เธเธฑเธเธเธทเธเธ”เธตเธ”เธเธดเธ”เนเธฅเนเธง", Duration=2})
-		end
+		AimAtModelEnabled = state
 	end
 })
 
@@ -366,7 +395,6 @@ Tab:Slider({
     end
 })
 
--- เธชเนเธงเธ ESP, Character เนเธฅเธฐเธเธตเน€เธเธญเธฃเนเธญเธทเนเธเน (เธเธฑเธ”เธฅเธญเธเธเธฒเธเธ•เนเธเธเธเธฑเธ)
 local Tab_ESP = Window:Tab({
     Title = "ESP",
     Icon = "eye",
@@ -573,7 +601,6 @@ end
 
 loadESP()
 
--- Character tab and other features (เธเธฑเธ”เธฅเธญเธเธเธฒเธเธ•เนเธเธเธเธฑเธ)
 local Tab_Character = Window:Tab({
     Title = "Character",
     Icon = "user",
@@ -612,6 +639,8 @@ end)
 
 setupCharacter(character)
 
+local LocalPlayer = Players.LocalPlayer
+local Character, Humanoid, HumanoidRootPart
 local FlyEnabled = false
 local flying = false
 local floatPower = 40
@@ -642,6 +671,7 @@ Tab_Character:Toggle({
 	end
 })
 
+-- PC
 UserInputService.InputBegan:Connect(function(input, processed)
 	if processed then return end
 	if FlyEnabled and input.KeyCode == Enum.KeyCode.Space then
@@ -655,6 +685,7 @@ UserInputService.InputEnded:Connect(function(input)
 	end
 end)
 
+-- มือถือ
 UserInputService.JumpRequest:Connect(function()
 	if FlyEnabled then
 		flying = true
@@ -667,6 +698,7 @@ HumanoidStateTypeChanged = function(_, newState)
 	end
 end
 
+--ลูป
 RunService.RenderStepped:Connect(function()
 	if FlyEnabled and flying and HumanoidRootPart then
 		local v = HumanoidRootPart.Velocity
@@ -770,9 +802,9 @@ Tab_Character:Toggle({
         fastFinishEnabled = state
         if state then
             applyToAll()
-            WindUI:Notify({Title="โ… Fast Finish Enabled", Description="โ… Fast Finish Enabled", Duration=3})
+            WindUI:Notify({Title="✅ Fast Finish Enabled", Description="✅ Fast Finish Enabled", Duration=3})
         else
-            WindUI:Notify({Title="โ Fast Finish Disabled", Description="โ Fast Finish Disabled", Duration=3})
+            WindUI:Notify({Title="❌ Fast Finish Disabled", Description="❌ Fast Finish Disabled", Duration=3})
         end
     end
 })
@@ -832,9 +864,9 @@ Tab_Character:Toggle({
     Callback = function(state)
         hookEnabled = state
         if state then
-            WindUI:Notify({Title="โ… Hook Enabled", Description="โ… Hook Enabled", Duration=3})
+            WindUI:Notify({Title="✅ Hook Enabled", Description="✅ Hook Enabled", Duration=3})
         else
-            WindUI:Notify({Title="โ Hook Disabled", Description="โ Hook Disabled", Duration=3})
+            WindUI:Notify({Title="❌ Hook Disabled", Description="❌ Hook Disabled", Duration=3})
         end
     end
 })
