@@ -39,10 +39,10 @@ if WindUI then
     Window =
         WindUI:CreateWindow(
         {
-            Title = "yomo 🔫 | 0.1 | Premium  ",
+            Title = "MOKUN NEXUS 🔫 | a4.0 | Paid ",
             Icon = "cloud-lightning",
-            Author = "mo",
-            Folder = "yomo Now",
+            Author = "https://discord.gg/RCgqfsCKB4",
+            Folder = "MOKUN NEXUS Now",
             Size = UDim2.fromOffset(400, 200),
             Theme = "Dark",
             Transparent = true,
@@ -164,124 +164,17 @@ pcall(
 local CharModule = require(game.ReplicatedStorage.Modules.Core.Char)
 -- == Global Variables (Grouped by Feature) ==
 -- Silent Aim
--- Replaced the original Silent Aim implementation with the improved one from message_silentaim_fix.lua.txt
 local SilentAimEnabled = false
-local SilentAimAttachEnabled = false -- keep compatibility with UI that may reference attach anti-lock
+local SilentAimAttachEnabled = false
 local FOVRadius = 120
 local CurrentTarget = nil
-
 local SilentFOVCircle = nil
 local Tracer = Drawing.new("Line")
 Tracer.Thickness = 1
 Tracer.Color = Color3.fromRGB(255, 50, 50)
 Tracer.Transparency = 1
 Tracer.Visible = false
-
--- Settings for prediction
-local bulletSpeed = 6000 -- bullet speed used for lead prediction (units per second) <- set to 6000
-local maxPing = 0.1 -- cap ping to 100ms <- set to 100 ms
-
-local function disableRecoil()
-    if LocalPlayer.Character then
-        local backpack = LocalPlayer:FindFirstChild("Backpack")
-        for _, tool in pairs((backpack and backpack:GetChildren()) or {}) do
-            if tool:IsA("Tool") then
-                for _, sc in pairs(tool:GetChildren()) do
-                    if sc:IsA("LocalScript") and sc.Name:lower():find("recoil") then
-                        sc.Disabled = true
-                    end
-                end
-            end
-        end
-        -- also check character tools
-        for _, tool in pairs(LocalPlayer.Character:GetChildren()) do
-            if tool:IsA("Tool") then
-                for _, sc in pairs(tool:GetChildren()) do
-                    if sc:IsA("LocalScript") and sc.Name:lower():find("recoil") then
-                        sc.Disabled = true
-                    end
-                end
-            end
-        end
-    end
-end
-
-local function getPing()
-    local stats = LocalPlayer:FindFirstChild("PlayerGui") and LocalPlayer.PlayerGui:FindFirstChild("NetworkStats")
-    if stats then
-        local pingText = stats:FindFirstChild("PingLabel")
-        if pingText and typeof(pingText.Text) == "string" then
-            local ping = tonumber(pingText.Text:match("%d+"))
-            return ping and ping / 1000 or maxPing
-        end
-    end
-    return maxPing
-end
-
-local function getPingCapped()
-    return math.min(getPing(), maxPing)
-end
-
--- Silent Aim target (select closest, visible, in FOV)
-local function getClosestTarget_messageStyle()
-    local closest = nil
-    local shortestDistance = math.huge
-    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
-            local head = player.Character.Head
-            local pos, onScreen = Camera:WorldToViewportPoint(head.Position)
-
-            if onScreen and head.Position and Camera.CFrame.Position then
-                local screenPos = Vector2.new(pos.X, pos.Y)
-                local distFromCenter = (screenPos - center).Magnitude
-                if distFromCenter <= FOVRadius then
-                    local toTarget = (head.Position - Camera.CFrame.Position).Unit
-                    local forward = Camera.CFrame.LookVector
-                    local dot = forward:Dot(toTarget)
-                    -- easing the dot requirement to 0.1 for easier target select
-                    if dot > 0.1 then
-                        local distance3D = (head.Position - (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head") and LocalPlayer.Character.Head.Position or Camera.CFrame.Position)).Magnitude
-                        if distance3D < shortestDistance then
-                            shortestDistance = distance3D
-                            closest = player
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    return closest
-end
-
--- Predict target position based on bullet speed + ping
-local function predictPositionWithBullet(head, hrp)
-    local ping = getPingCapped()
-    local velocity = hrp and hrp.Velocity or Vector3.zero
-    local distance = (head.Position - Camera.CFrame.Position).Magnitude
-    local bulletTravelTime = (bulletSpeed > 0 and distance / bulletSpeed) or 0
-    local totalLeadTime = bulletTravelTime + ping * 1.15
-    return head.Position + (velocity * totalLeadTime)
-end
-
--- Check obstruction between two points (legacy/compatible simple check)
-local function isObstructedOrNotWall(startPos, endPos)
-    local ray = Ray.new(startPos, endPos - startPos)
-    local ignoreList = {LocalPlayer.Character, CurrentTarget and CurrentTarget.Character or nil}
-    local hit, hitObj = Workspace:FindPartOnRayWithIgnoreList(ray, ignoreList)
-    if hitObj then
-        if hitObj.CanCollide and (hitObj.Transparency or 0) < 0.5 then
-            return true, hitObj -- obstruction found
-        end
-    end
-    return false, nil -- clear
-end
-
--- =========================
 -- ESP
--- =========================
 local espPlayers = {}
 local boxESPEnabled = false
 local nameESPEnabled = false
@@ -358,7 +251,7 @@ pcall(
     end
 )
 -- == Utility Functions ==
-local function getPing_old()
+local function getPing()
     local stats = LocalPlayer:FindFirstChild("PlayerGui") and LocalPlayer.PlayerGui:FindFirstChild("NetworkStats")
     if stats then
         local pingText = stats:FindFirstChild("PingLabel")
@@ -377,16 +270,38 @@ local function isPlayerExcluded(playerName)
     end
     return false
 end
-
--- Note: Using the message-style getClosestTarget implementation
 local function getClosestTarget()
-    return getClosestTarget_messageStyle()
+    local closest = nil
+    local shortestDistance = FOVRadius -- ใช้ FOV เป็นขอบเขต
+    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            local head = player.Character:FindFirstChild("Head")
+            local humanoid = player.Character:FindFirstChild("Humanoid")
+            local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+            if head and humanoid and humanoid.Health > 0 and hrp then
+                local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+                if onScreen then
+                    local screenVector = Vector2.new(screenPos.X, screenPos.Y)
+                    local distanceFromCenter = (screenVector - center).Magnitude
+                    -- อยู่ใน FOV และไม่ถูกยกเว้น
+                    if distanceFromCenter <= FOVRadius and not isPlayerExcluded(player.Name) then
+                        if distanceFromCenter < shortestDistance then
+                            shortestDistance = distanceFromCenter
+                            closest = player
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return closest
 end
-
 local function predictPosition(head, hrp)
-    return predictPositionWithBullet(head, hrp)
+    local ping = getPing()
+    local velocity = hrp and hrp.Velocity or Vector3.zero
+    return head.Position + (velocity * ping * 1.15)
 end
-
 local function isBehindWall(startPos, endPos)
     if not startPos or not endPos then
         return false
@@ -1390,15 +1305,14 @@ local function loadESP()
         end
     )
 end
-
--- Silent FOV Circle Setup (message-style)
+-- Silent FOV Circle Setup
 if not isMobile then
     SilentFOVCircle = Drawing.new("Circle")
-    SilentFOVCircle.Color = Color3.fromRGB(255, 255, 0)
-    SilentFOVCircle.Thickness = 1
+    SilentFOVCircle.Color = Color3.fromRGB(255, 255, 255)
+    SilentFOVCircle.Thickness = 2 -- Increased thickness for better visibility
     SilentFOVCircle.NumSides = 64
     SilentFOVCircle.Filled = false
-    SilentFOVCircle.Transparency = 1
+    SilentFOVCircle.Transparency = 0.8 -- Slightly less transparent for better visibility
     SilentFOVCircle.Radius = FOVRadius
     SilentFOVCircle.Visible = false
 else
@@ -1415,12 +1329,11 @@ else
     circleUI.Parent = SilentFOVCircle
     local border = Instance.new("UIStroke")
     border.Color = Color3.fromRGB(255, 255, 255)
-    border.Thickness = 2
-    border.Transparency = 0.2
+    border.Thickness = 2 -- Increased thickness for better visibility
+    border.Transparency = 0.2 -- Slightly less transparent for better visibility
     border.Parent = SilentFOVCircle
     SilentFOVCircle.Parent = ScreenGui
 end
-
 local function isShotgun()
     if not Character then
         return false
@@ -1435,48 +1348,109 @@ local function isShotgun()
     end
     return false
 end
+local oldFire
+if Remote and Remote.FireServer then
+    local ok, res = pcall(function()
+        oldFire = hookfunction(Remote.FireServer, function(self, ...)
+            if self ~= Remote then return oldFire(self, ...) end
+            local args = {...}
+            if SilentAimEnabled and args[2] == "shoot_gun" and CurrentTarget then
+		local head = CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("Head")
+		local hrp = CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
+		local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
+		if head and humanoid and hrp then
+			local aimPos = predictPosition(head, hrp)
+			local displacement = aimPos - head.Position
+			local hitCFrame = CurrentTarget.Character:GetPivot() + displacement
+			local previousHealth = humanoid.Health
 
--- Hook Remote.FireServer for Silent Aim (message-style)
--- We attempt to hook Remote.FireServer; if hookfunction is unavailable the pcall will warn but not crash
-local RemoteSend = Remote or (ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Send"))
+			-- Check if target is behind a wall (calculated but not used for conditional logic in original; kept for potential future use)
+			local isObstructed = isBehindWall(LocalPlayer.Character.Head.Position, aimPos)
 
-local ok, err = pcall(function()
-    if not RemoteSend or not RemoteSend.FireServer then
-        return
-    end
-    local oldFire = hookfunction and hookfunction(RemoteSend.FireServer, function(self, ...)
-        local args = {...}
-        -- only intercept shoot_gun actions
-        if SilentAimEnabled and tostring(args[2]) == "shoot_gun" and CurrentTarget and CurrentTarget.Character then
-            disableRecoil()
-            local head = CurrentTarget.Character:FindFirstChild("Head")
-            local hrp = CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
-            local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
-            if head and humanoid and hrp then
-                local aimPos = predictPositionWithBullet(head, hrp)
-                local isWall, wallObj = isObstructedOrNotWall(LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head") and LocalPlayer.Character.Head.Position or Camera.CFrame.Position, aimPos)
-                if isWall and wallObj then
-                    -- attempt to modify args safely (structures vary by game)
-                    if args[5] and args[5][1] and args[5][1][1] then
-                        args[5][1][1].Instance = wallObj
-                        args[5][1][1].Position = aimPos
-                    end
-                else
-                    if args[5] and args[5][1] and args[5][1][1] then
-                        args[5][1][1].Instance = head
-                        args[5][1][1].Position = aimPos
+			args[4] = CFrame.new(math.huge, math.huge, math.huge)
+
+			args[5] = {
+				[1] = {
+					[1] = {
+						["Instance"] = head,
+						["Normal"] = Vector3.new(0, 1, 0),
+						["Position"] = aimPos
+					}
+				}
+			}
+
+                    -- ✅ เอฟเฟกต์กระสุน
+                    local success, beam = pcall(function()
+                        local part = Instance.new("Part")
+                        part.Anchored = true
+                        part.CanCollide = false
+                        part.Size = Vector3.new(0.15, 0.15, (aimPos - myPos).Magnitude)
+                        part.CFrame = CFrame.new(myPos, aimPos) * CFrame.new(0, 0, -part.Size.Z / 2)
+                        part.Material = Enum.Material.Neon
+                        part.Transparency = 0.25
+                        part.Parent = Workspace
+                        Debris:AddItem(part, 4)
+                        return part
+                    end)
+
+                    if humanoid then
+                        local previousHealth = humanoid.Health
+                        spawn(function()
+                            wait(0.1)
+                            if humanoid and humanoid.Health < previousHealth then
+                                if success and beam then
+                                    beam.Color = Color3.fromRGB(0, 255, 0)
+                                end
+                                for _, part in ipairs(CurrentTarget.Character:GetDescendants()) do
+                                    if part:IsA("BasePart") then
+                                        local box = Instance.new("Part")
+                                        box.Size = part.Size + Vector3.new(0.05, 0.05, 0.05)
+                                        box.CFrame = part.CFrame
+                                        box.Anchored = true
+                                        box.CanCollide = false
+                                        box.Material = Enum.Material.Neon
+                                        box.Color = Color3.fromRGB(128, 0, 128)
+                                        box.Transparency = 0.5
+                                        box.Parent = Workspace
+                                        local tweenInfo = TweenInfo.new(1.5, Enum.EasingStyle.Linear)
+                                        TweenService:Create(box, tweenInfo, {Transparency = 1}):Play()
+                                        Debris:AddItem(box, 2)
+                                    end
+                                end
+                                if head then
+                                    local blood = Instance.new("Part")
+                                    blood.Size = Vector3.new(0.2, 0.2, 0.2)
+                                    blood.Shape = Enum.PartType.Ball
+                                    blood.Material = Enum.Material.Neon
+                                    blood.Color = Color3.fromRGB(255, 0, 0)
+                                    blood.CFrame = CFrame.new(head.Position)
+                                    blood.Anchored = false
+                                    blood.CanCollide = false
+                                    blood.Parent = Workspace
+                                    local bv = Instance.new("BodyVelocity")
+                                    bv.Velocity = Vector3.new(math.random(-5, 5), math.random(5, 10), math.random(-5, 5))
+                                    bv.P = 5000
+                                    bv.MaxForce = Vector3.new(4000, 4000, 4000)
+                                    bv.Parent = blood
+                                    Debris:AddItem(blood, 1)
+                                end
+                            else
+                                if success and beam then
+                                    beam.Color = Color3.fromRGB(255, 0, 0)
+                                end
+                            end
+                        end)
                     end
                 end
-                -- obscure aim origin to avoid certain checks
-                args[4] = CFrame.new(math.huge, math.huge, math.huge)
             end
-            print("Silent Aim Fired at:", CurrentTarget.Name, "Pos:", args[5] and args[5][1] and args[5][1][1] and args[5][1][1].Position)
-        end
-        return oldFire(self, unpack(args))
+
+            return oldFire(self, unpack(args))
+        end)
     end)
-end)
-if not ok then
-    warn("Warning: failed to hook Remote.Send.FireServer for Silent Aim:", err)
+
+    if not ok then
+        warn("Warning: failed to hook Remote.FireServer")
+    end
 end
 
 -- Main Render Loop
@@ -1484,28 +1458,20 @@ RunService.RenderStepped:Connect(
     function()
         pcall(
             function()
-                -- update FOV circle visibility and position
-                SilentFOVCircle.Visible = SilentAimEnabled or SilentAimAttachEnabled
-                if isMobile and typeof(SilentFOVCircle) == "Instance" then
-                    SilentFOVCircle.Position = UDim2.fromScale(0.5, 0.5)
-                    SilentFOVCircle.Size = UDim2.fromOffset(FOVRadius * 2, FOVRadius * 2)
-                else
-                    if SilentFOVCircle and SilentFOVCircle.Position then
-                        -- Drawing circle uses Vector2
-                        if typeof(SilentFOVCircle) == "userdata" then
-                            SilentFOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-                            SilentFOVCircle.Radius = FOVRadius
-                        end
+                if SilentAimAttachEnabled then
+                    CurrentTarget = getClosestTarget()
+                end
+                if SilentFOVCircle then
+                    SilentFOVCircle.Visible = SilentAimEnabled or SilentAimAttachEnabled
+                    if isMobile then
+                        SilentFOVCircle.Position = UDim2.fromScale(0.5, 0.5)
+                        SilentFOVCircle.Size = UDim2.fromOffset(FOVRadius * 2, FOVRadius * 2)
+                    else
+                        SilentFOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+                        SilentFOVCircle.Radius = FOVRadius
                     end
                 end
-
-                -- choose target according to selected silent settings
-                if SilentAimEnabled or SilentAimAttachEnabled then
-                    CurrentTarget = getClosestTarget()
-                else
-                    CurrentTarget = nil
-                end
-
+                CurrentTarget = (SilentAimEnabled or SilentAimAttachEnabled) and getClosestTarget() or nil
                 if CurrentTarget and CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("Head") then
                     local targetHead = CurrentTarget.Character.Head
                     local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
@@ -1526,7 +1492,6 @@ RunService.RenderStepped:Connect(
                 else
                     Tracer.Visible = false
                 end
-
                 if FlyEnabled and isFlyingUp and HumanoidRootPart then
                     local v = HumanoidRootPart.Velocity
                     HumanoidRootPart.Velocity = Vector3.new(v.X, floatPower, v.Z)
@@ -2424,7 +2389,6 @@ local AntiRagdollToggle =
                                 return obj
                             end
                         end
-                        return nil
                     end
                     local CounterTable = findCounter()
                     if not CounterTable then
@@ -2499,7 +2463,6 @@ local AutoRespawnToggle =
                                 return obj
                             end
                         end
-                        return nil
                     end
                     local CounterTable = findCounter()
                     if not CounterTable then
@@ -2619,4 +2582,166 @@ local StopButton =
         end
     }
 )
-myConfig:Register("
+myConfig:Register("StopButton", StopButton)
+local Folder = Instance.new("Folder", Workspace)
+local CorePart = Instance.new("Part", Folder)
+local Attachment1 = Instance.new("Attachment", CorePart)
+CorePart.Anchored = true
+CorePart.CanCollide = false
+CorePart.Transparency = 1
+Tab_player:Divider()
+local AutoFinnishToggle =
+    Tab_player:Toggle(
+    {
+        Title = "Auto Finnish",
+        Default = false,
+        Callback = function(state)
+            fastFinishEnabled = state
+            if state then
+                applyToAll()
+                if WindUI then
+                    WindUI:Notify({Title = "✅ Auto Finish Enabled", Description = "✅ Auto Enabled", Duration = 3})
+                end
+            else
+                if WindUI then
+                    WindUI:Notify({Title = "❌ Auto Disabled", Description = "❌ Auto Disabled", Duration = 3})
+                end
+            end
+        end
+    }
+)
+myConfig:Register("AutoFinnish", AutoFinnishToggle)
+-- Tab BUY
+local Tab_buyer = Window:Tab({Title = "BUY:", Icon = "landmark"})
+Tab_buyer:Section({Title = "BUY:"})
+local function safeToggle(title, desc, key, callback)
+    pcall(
+        function()
+            local ToggleElement =
+                Tab_buyer:Toggle(
+                {
+                    Title = title,
+                    Desc = desc,
+                    Icon = "check",
+                    Type = "Checkbox",
+                    Default = false,
+                    Callback = function(state)
+                        AutoSkipEnabled = state
+                        if callback then
+                            callback(state)
+                        end
+                    end
+                }
+            )
+            myConfig:Register(key, ToggleElement)
+        end
+    )
+end
+-- ใช้งาน:
+safeToggle(
+    "Skip Crate Spin",
+    "ข้ามการหมุนกล่องอัตโนมัติ",
+    "SkipCrate",
+    function(state)
+        if state then
+            TrySkipCrate()
+        end
+    end
+)
+myConfig:Register("SkipCrate", SkipCrateToggle)
+-- Tab MISC
+local Tab_misc = Window:Tab({Title = "MISC:", Icon = "warehouse"})
+-- ปุ่ม Claim All Quest
+local ClaimAllQuestButton =
+    Tab_misc:Button(
+    {
+        Title = "Claim All Quest",
+        Callback = function()
+            task.spawn(
+                function()
+                    local success, err =
+                        pcall(
+                        function()
+                            local Players = game:GetService("Players")
+                            local ReplicatedStorage = game:GetService("ReplicatedStorage")
+                            local player = Players.LocalPlayer
+                            -- หา CounterTable อย่างปลอดภัย
+                            local function findCounter()
+                                for _, obj in ipairs(getgc and getgc(true) or {}) do
+                                    if typeof(obj) == "table" and rawget(obj, "event") and rawget(obj, "func") then
+                                        return obj
+                                    end
+                                end
+                                return nil
+                            end
+                            local CounterTable = findCounter()
+                            if not CounterTable then
+                                return
+                            end
+                            -- ฟังก์ชันส่ง Remote แบบ local
+                            local Net = {}
+                            function Net.get(...)
+                                local args = {...}
+                                CounterTable.func = (CounterTable.func or 0) + 1
+                                local GetRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Get")
+                                return GetRemote:InvokeServer(CounterTable.func, table.unpack(args))
+                            end
+                            local questFrame =
+                                player:WaitForChild("PlayerGui"):WaitForChild("Quests"):WaitForChild("QuestsHolder"):WaitForChild(
+                                "QuestsScrollingFrame"
+                            )
+                            for _, child in ipairs(questFrame:GetChildren()) do
+                                if child:IsA("Frame") or child:IsA("TextButton") or child:IsA("ImageButton") then
+                                    Net.get("claim_quest", child.Name)
+                                    task.wait(0.2)
+                                end
+                            end
+                        end
+                    )
+                    if success then
+                        print("Claim All Quests Completed")
+                    else
+                        warn(err)
+                    end
+                end
+            )
+        end
+    }
+)
+myConfig:Register("ClaimAllQuest", ClaimAllQuestButton)
+-- แทนที่การเข้าถึงโดยตรงด้วยตัวแปร
+local saveFunc = myConfig["Save"]
+local deleteFunc = myConfig["Delete"]
+local loadFunc = myConfig["Load"]
+-- สร้าง Section
+Tab_misc:Section({Title = "Config Management"})
+-- ปุ่มบันทึก Config
+local SaveConfigButton =
+    Tab_misc:Button(
+    {
+        Title = "Save Config",
+        Callback = function()
+            if saveFunc then
+                saveFunc(myConfig)
+            end
+        end
+    }
+)
+myConfig:Register("SaveConfig", SaveConfigButton)
+-- ปุ่มลบ Config
+local DeleteConfigButton =
+    Tab_misc:Button(
+    {
+        Title = "Delete Config",
+        Callback = function()
+            if deleteFunc then
+                deleteFunc(myConfig)
+            end
+        end
+    }
+)
+myConfig:Register("DeleteConfig", DeleteConfigButton)
+-- โหลด Config
+if loadFunc then
+    loadFunc(myConfig)
+end
