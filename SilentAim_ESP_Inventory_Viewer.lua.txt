@@ -240,6 +240,9 @@ local WeaponDB = {}
 local BillboardCache = {}
 local ESPEnabled = false
 local ESPConnection = nil
+-- Cache for weapon info to avoid repeated lookups
+local weaponInfoCache = {}
+local meshIdCache = {}
 -- Counter Table for Remotes
 local CounterTable
 pcall(
@@ -331,6 +334,13 @@ local function setupCharacter(char)
     Character = char
     Humanoid = char:WaitForChild("Humanoid")
     HumanoidRootPart = char:WaitForChild("HumanoidRootPart")
+    
+    -- Clear caches when character resets
+    weaponInfoCache = {}
+    meshIdCache = {}
+    shotgunCheckCache = {}
+    shotgunCheckTime = 0
+    
     if moveConnection then
         pcall(
             function()
@@ -427,20 +437,40 @@ local function NetGet(...)
     end
     return result
 end
+local lastPickupCheck = 0
+local lastPickupCleanup = 0
 local function CheckAndPickup()
     if not sucking then
         return
     end
+    -- Throttle to every 0.2 seconds instead of every frame
+    local now = tick()
+    if now - lastPickupCheck < 0.2 then
+        return
+    end
+    lastPickupCheck = now
+    
+    -- Clean up old entries every 30 seconds to prevent memory leaks
+    if now - lastPickupCleanup > 30 then
+        lastPickupCleanup = now
+        for item, time in pairs(lastPickupTimes) do
+            if not item or not item.Parent or now - time > 60 then
+                lastPickupTimes[item] = nil
+            end
+        end
+    end
+    
     local dropped = Workspace:FindFirstChild("DroppedItems")
     if not dropped then
         return
     end
+    local hrpPos = HumanoidRootPart.Position
     for _, item in ipairs(dropped:GetChildren()) do
         if item:IsA("Model") and item:FindFirstChildWhichIsA("BasePart") then
             local modelCF = item.GetPivot and item:GetPivot() or item:GetModelCFrame()
-            local distance = (HumanoidRootPart.Position - modelCF.Position).Magnitude
-            if distance <= 15 then
-                local now = tick()
+            local delta = modelCF.Position - hrpPos
+            local distSquared = delta.X * delta.X + delta.Y * delta.Y + delta.Z * delta.Z
+            if distSquared <= 225 then -- 15*15 = 225
                 local lastTime = lastPickupTimes[item] or 0
                 if now - lastTime >= 1.5 then
                     pcall(
@@ -520,15 +550,17 @@ local function getPlayersInRange(radius)
         return inRange
     end
     local pos = char.PrimaryPart.Position
+    local radiusSquared = radius * radius -- Compare squared distances to avoid sqrt
     for _, player in pairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character and player.Character.PrimaryPart then
-            local ok, mag =
+            local ok, distSquared =
                 pcall(
                 function()
-                    return (player.Character.PrimaryPart.Position - pos).Magnitude
+                    local delta = player.Character.PrimaryPart.Position - pos
+                    return delta.X * delta.X + delta.Y * delta.Y + delta.Z * delta.Z
                 end
             )
-            if ok and mag and mag <= radius then
+            if ok and distSquared and distSquared <= radiusSquared then
                 table.insert(inRange, player)
             end
         end
@@ -738,28 +770,50 @@ local function registerItems(folder)
     end
 end
 local function getMeshId(tool)
+    -- Check cache first
+    if meshIdCache[tool] then
+        return meshIdCache[tool]
+    end
+    
     local handle = tool:FindFirstChild("Handle")
     if not handle then
         return nil
     end
     local mesh = handle:FindFirstChildOfClass("SpecialMesh")
+    local meshId
     if mesh then
-        return mesh.MeshId .. (mesh.TextureId or "")
+        meshId = mesh.MeshId .. (mesh.TextureId or "")
+    elseif handle:IsA("MeshPart") then
+        meshId = handle.MeshId .. (handle.TextureID or "")
     end
-    if handle:IsA("MeshPart") then
-        return handle.MeshId .. (handle.TextureID or "")
+    
+    -- Cache the result
+    if meshId then
+        meshIdCache[tool] = meshId
     end
-    return nil
+    return meshId
 end
 local function getWeaponInfo(tool)
-    local meshId = getMeshId(tool)
-    if meshId and WeaponDB[meshId] then
-        return WeaponDB[meshId]
-    elseif WeaponDB[tool.Name] then
-        return WeaponDB[tool.Name]
-    else
-        return nil
+    -- Check cache first to avoid repeated lookups
+    if weaponInfoCache[tool] then
+        return weaponInfoCache[tool]
     end
+    
+    local meshId = getMeshId(tool)
+    local info
+    if meshId and WeaponDB[meshId] then
+        info = WeaponDB[meshId]
+    elseif WeaponDB[tool.Name] then
+        info = WeaponDB[tool.Name]
+    else
+        info = nil
+    end
+    
+    -- Cache the result
+    if info then
+        weaponInfoCache[tool] = info
+    end
+    return info
 end
 local function createBillboardForPlayer(player)
     if not ESPEnabled or player == LocalPlayer then
@@ -879,8 +933,17 @@ local function tryHoldPrompt(prompt, duration)
     )
     prompt:SetAttribute("__AutoFinishBusy", nil)
 end
+local lastPromptScan = 0
+local cachedPrompts = {}
 local function findFinishPrompts()
-    local found = {}
+    -- Cache prompts for 0.5 seconds to reduce workspace scanning
+    local now = tick()
+    if now - lastPromptScan < 0.5 and #cachedPrompts > 0 then
+        return cachedPrompts
+    end
+    lastPromptScan = now
+    cachedPrompts = {}
+    
     for _, char in pairs(workspace:GetChildren()) do
         local player = Players:GetPlayerFromCharacter(char)
         if player and not isPlayerExcluded(player.Name) then
@@ -889,12 +952,12 @@ local function findFinishPrompts()
                 local prompt = hrp:FindFirstChild("FinishPrompt")
                 if prompt then
                     setFinishPrompt(prompt)
-                    table.insert(found, prompt)
+                    table.insert(cachedPrompts, prompt)
                 end
             end
         end
     end
-    return found
+    return cachedPrompts
 end
 local function applyToAll()
     for _, p in ipairs(Players:GetPlayers()) do
@@ -1059,7 +1122,15 @@ local function createHighlight(character)
     highlight.Parent = character
     return highlight
 end
+local lastHighlightUpdate = 0
 local function updateHighlights()
+    -- Throttle updates to every 1 second
+    local now = tick()
+    if now - lastHighlightUpdate < 1 then
+        return
+    end
+    lastHighlightUpdate = now
+    
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             if not highlights[player] or not highlights[player].Parent then
@@ -1421,18 +1492,32 @@ else
     border.Parent = SilentFOVCircle
     SilentFOVCircle.Parent = ScreenGui
 end
+local shotgunCheckCache = {}
+local shotgunCheckTime = 0
 local function isShotgun()
+    -- Cache result for 0.5 seconds to avoid repeated attribute lookups
+    local now = tick()
+    if shotgunCheckCache.result and (now - shotgunCheckTime) < 0.5 then
+        return shotgunCheckCache.result
+    end
+    
     if not Character then
+        shotgunCheckCache.result = false
+        shotgunCheckTime = now
         return false
     end
     for _, tool in ipairs(Character:GetChildren()) do
         if tool:IsA("Tool") then
             local ammoType = tool:GetAttribute("AmmoType")
             if ammoType == "shotgun" or ammoType == "shootgun" then
+                shotgunCheckCache.result = true
+                shotgunCheckTime = now
                 return true
             end
         end
     end
+    shotgunCheckCache.result = false
+    shotgunCheckTime = now
     return false
 end
 local oldFire
