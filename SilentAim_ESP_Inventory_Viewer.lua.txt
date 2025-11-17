@@ -16,7 +16,7 @@ local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 local Mouse = LocalPlayer:GetMouse()
 
 local Window = WindUI:CreateWindow({
-    Title = "god hub🌍 | v0.1b  | ",
+    Title = "god hub🌍 | v0.1c  | ",
     Icon = "menu",
     Author = "🦅",
     Folder = "yomoHubkFolder",
@@ -44,7 +44,7 @@ local Tab = Window:Tab({Title = "Silent Aim", Icon = "crosshair"})
 local SilentAimEnabled = false
 local NoRecoilEnabled = true
 local FOVRadius = 120
-local CurrentTarget = nil
+local AttackAntiaimEnabled = true
 
 local ConstantBulletSpeed = 2000
 
@@ -85,14 +85,14 @@ local function isBehindWall(startPos, endPos)
     return false
 end
 
--- ตรวจสอบ Antiaim: ถ้าหัวเคลื่อนเร็วผิดปกติ ให้ยิงที่ HRP แทน
+-- ตรวจสอบ Antiaim (ถ้าหัวหมุนหรือเคลื่อนเร็วผิดปกติ)
 local function isAntiAim(player)
     if player.Character and player.Character:FindFirstChild("Head") then
         local head = player.Character.Head
         local hrp = player.Character:FindFirstChild("HumanoidRootPart")
         if head and hrp then
             local velocity = head.Velocity
-            if velocity.magnitude > 40 then -- ปรับ threshold ได้
+            if velocity.magnitude > 40 then
                 return true
             end
         end
@@ -100,6 +100,7 @@ local function isAntiAim(player)
     return false
 end
 
+-- *** ปรับแก้ ไม่ล็อกเป้าหมายที่ตายแล้ว ***
 local function getClosestTarget()
     local closest = nil
     local shortestDistance = math.huge
@@ -107,6 +108,11 @@ local function getClosestTarget()
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
+            local humanoid = player.Character:FindFirstChild("Humanoid")
+            if not humanoid or humanoid.Health <= 0 then
+                -- ข้ามคนตาย/ไม่มี Humanoid
+                goto continue
+            end
             local head = player.Character.Head
             local pos, onScreen = Camera:WorldToViewportPoint(head.Position)
             if onScreen then
@@ -126,6 +132,7 @@ local function getClosestTarget()
                 end
             end
         end
+        ::continue::
     end
 
     return closest
@@ -143,9 +150,14 @@ RunService.RenderStepped:Connect(function()
     end
 
     if CurrentTarget and CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("Head") then
+        local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then
+            Tracer.Visible = false
+            return
+        end
+
         local targetHead = CurrentTarget.Character.Head
         local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-        local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
         if myHead then
             local myScreenPos, myOnScreen = Camera:WorldToViewportPoint(myHead.Position)
             local targetScreenPos, targetOnScreen = Camera:WorldToViewportPoint(targetHead.Position)
@@ -153,10 +165,8 @@ RunService.RenderStepped:Connect(function()
                 Tracer.Visible = true
                 Tracer.From = Vector2.new(myScreenPos.X, myScreenPos.Y)
                 Tracer.To = Vector2.new(targetScreenPos.X, targetScreenPos.Y)
-                if humanoid then
-                    local perc = humanoid.Health / humanoid.MaxHealth
-                    Tracer.Color = Color3.fromHSV(perc * 0.333, 1, 1)
-                end
+                local perc = humanoid.Health / humanoid.MaxHealth
+                Tracer.Color = Color3.fromHSV(perc * 0.333, 1, 1)
             else
                 Tracer.Visible = false
             end
@@ -169,7 +179,6 @@ end)
 local function doRecoilGunMods()
     while true do
         task.wait(1)
-        -- No Recoil Gun Mods Logic (compatible with normal tools & Attribute)
         for _, tool in pairs(LocalPlayer.Backpack:GetChildren()) do
             if tool:IsA("Tool") and (tool:FindFirstChild("Recoil") or tool:GetAttribute("Recoil")) then
                 if tool:FindFirstChild("Recoil") then tool.Recoil.Value = 0 end
@@ -197,10 +206,10 @@ oldFire = hookfunction(Remote.FireServer, function(self, ...)
         local head = CurrentTarget.Character:FindFirstChild("Head")
         local hrp = CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
         local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
-        if head and humanoid and hrp then
+        if head and humanoid and hrp and humanoid.Health > 0 then -- **ยิงเฉพาะคนที่มีชีวิต**
             local myHeadPos = LocalPlayer.Character.Head.Position
             local aimPos
-            if isAntiAim(CurrentTarget) then
+            if AttackAntiaimEnabled and isAntiAim(CurrentTarget) then
                 aimPos = hrp.Position
             else
                 aimPos = head.Position
@@ -212,7 +221,7 @@ oldFire = hookfunction(Remote.FireServer, function(self, ...)
             args[5] = {
                 [1] = {
                     [1] = {
-                        ["Instance"] = isAntiAim(CurrentTarget) and hrp or head,
+                        ["Instance"] = (AttackAntiaimEnabled and isAntiAim(CurrentTarget)) and hrp or head,
                         ["Normal"] = Vector3.new(0, 1, 0),
                         ["Position"] = aimPos,
                         ["Wallbang"] = wallbang,
@@ -221,7 +230,6 @@ oldFire = hookfunction(Remote.FireServer, function(self, ...)
                 }
             }
 
-            -- Beam effect
             local beam = Instance.new("Part")
             beam.Anchored = true
             beam.CanCollide = false
@@ -261,6 +269,14 @@ Tab:Toggle({
     end
 })
 
+Tab:Toggle({
+    Title = "Attack Antiaim (ยิงตรงจุดคนหมุนหัว)",
+    Default = true,
+    Callback = function(state)
+        AttackAntiaimEnabled = state
+    end
+})
+
 Tab:Slider({
     Title = "FOV: ",
     Step = 1,
@@ -284,8 +300,8 @@ local Tab_ESP = Window:Tab({
 
 local boxESPEnabled = false
 local nameESPEnabled = false
-local itemESPEnabled = false -- used for Inventory Viewer (player inventory)
-local itemDropESPEnabled = false -- NEW: Item Drop ESP (ของตกพื้น)
+local itemESPEnabled = false
+local itemDropESPEnabled = false
 local espPlayers = {}
 
 Tab_ESP:Toggle({
@@ -313,7 +329,7 @@ Tab_ESP:Toggle({
 })
 
 Tab_ESP:Toggle({
-    Title = "Item Drop ESP", -- ปุ่มใหม่สำหรับมองของตกพื้น
+    Title = "Item Drop ESP",
     Default = false,
     Callback = function(state)
         itemDropESPEnabled = state
@@ -330,7 +346,6 @@ local function getPlayerInventory(player)
             end
         end
     end
-    -- Check for equipped Item (มือถือ/ถืออยู่)
     if player.Character then
         for _, obj in pairs(player.Character:GetChildren()) do
             if obj:IsA("Tool") then
@@ -380,6 +395,13 @@ local function createESP(player)
 
         local head = player.Character.Head
         local hrp = player.Character.HumanoidRootPart
+        local humanoid = player.Character:FindFirstChild("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then -- **ESP ไม่แสดงคนตาย**
+            for _, line in pairs(lines) do line.Visible = false end
+            nameText.Visible = false
+            itemText.Visible = false
+            return
+        end
 
         local topWorld = head.Position + Vector3.new(0, 1, 0)
         local bottomWorld = hrp.Position - Vector3.new(0, 3.5, 0)
@@ -496,7 +518,6 @@ RunService.RenderStepped:Connect(function()
 
     if not dropfolder then return end
 
-    -- ลบ drawings ของไอเทมที่หายไป
     for obj, d in pairs(item_drawings) do
         if not obj or not obj.Parent then
             if d.box then d.box:Remove() end
