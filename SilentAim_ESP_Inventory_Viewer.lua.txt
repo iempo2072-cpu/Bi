@@ -11,12 +11,12 @@ local Debris = game:GetService("Debris")
 
 local LocalPlayer = Players.LocalPlayer
 local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local Humanoid = Character:WaitForChild("Humanoid")
-local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+local Humanoid = Character:FindFirstChild("Humanoid") or Character:WaitForChild("Humanoid", 5)
+local HumanoidRootPart = Character:FindFirstChild("HumanoidRootPart") or Character:WaitForChild("HumanoidRootPart", 5)
 local Mouse = LocalPlayer:GetMouse()
 
 local Window = WindUI:CreateWindow({
-    Title = "god hub🌍 | v0.1m  | ",
+    Title = "god hub🌍 | v0.1p  | ",
     Icon = "menu",
     Author = "🦅",
     Folder = "yomoHubkFolder",
@@ -66,20 +66,14 @@ Tracer.Color = Color3.fromRGB(0, 255, 255)
 Tracer.Transparency = 1
 Tracer.Visible = false
 
--- CSYNC antiaim
+-- CSYNC antiaim (ปลอดภัย: ปิดไปเลยถ้าค้างหรือ executor ไม่ support)
 local lastCSYNCPos = nil
 local csyncRadius = 2.5
 local csyncInterval = 0.2
 local csyncLastTick = tick()
 
-local function csyncTeleport()
-    if not CSYNC_AntiAimEnabled or not LocalPlayer.Character or not HumanoidRootPart then return end
-    local angle = math.random() * math.pi * 2
-    local offset = Vector3.new(math.cos(angle), 0, math.sin(angle)) * csyncRadius
-    lastCSYNCPos = HumanoidRootPart.Position + offset
-    HumanoidRootPart.CFrame = CFrame.new(lastCSYNCPos)
-end
-
+-- ปิด hookmetamethod สำหรับ executor ฟรี/ค้าง
+--[[ 
 if getrawmetatable and hookmetamethod then
     local mt = getrawmetatable(game)
     local oldNC = mt.__namecall
@@ -95,6 +89,15 @@ if getrawmetatable and hookmetamethod then
         return oldNC(self, ...)
     end)
     setreadonly(mt, true)
+end
+]]
+
+local function csyncTeleport()
+    if not CSYNC_AntiAimEnabled or not LocalPlayer.Character or not HumanoidRootPart then return end
+    local angle = math.random() * math.pi * 2
+    local offset = Vector3.new(math.cos(angle), 0, math.sin(angle)) * csyncRadius
+    lastCSYNCPos = HumanoidRootPart.Position + offset
+    HumanoidRootPart.CFrame = CFrame.new(lastCSYNCPos)
 end
 
 RunService.RenderStepped:Connect(function()
@@ -117,6 +120,10 @@ RunService.RenderStepped:Connect(function()
         local targetHead = CurrentTarget.Character.Head
         local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
         local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then
+            Tracer.Visible = false
+            return
+        end
         if myHead then
             local myScreenPos, myOnScreen = Camera:WorldToViewportPoint(myHead.Position)
             local targetScreenPos, targetOnScreen = Camera:WorldToViewportPoint(targetHead.Position)
@@ -195,6 +202,8 @@ local function getClosestTarget()
     local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
+            local humanoid = player.Character:FindFirstChild("Humanoid")
+            if not humanoid or humanoid.Health <= 0 then goto continue end
             local head = player.Character.Head
             local pos, onScreen = Camera:WorldToViewportPoint(head.Position)
             if onScreen then
@@ -214,90 +223,97 @@ local function getClosestTarget()
                 end
             end
         end
+        ::continue::
     end
     return closest
 end
 
+-- ปรับให้ปลอดภัยขึ้น: ลด loop frequency และ encase ใน pcall
 local function doRecoilGunMods()
     while true do
-        task.wait(1)
-        for _, tool in pairs(LocalPlayer.Backpack:GetChildren()) do
-            if tool:IsA("Tool") and (tool:FindFirstChild("Recoil") or tool:GetAttribute("Recoil")) then
-                if tool:FindFirstChild("Recoil") then tool.Recoil.Value = 0 end
-                if tool:GetAttribute("Recoil") then tool:SetAttribute("Recoil", 0) end
+        wait(2)
+        pcall(function()
+            for _, tool in pairs(LocalPlayer.Backpack:GetChildren()) do
+                if tool:IsA("Tool") and (tool:FindFirstChild("Recoil") or tool:GetAttribute("Recoil")) then
+                    if tool:FindFirstChild("Recoil") then tool.Recoil.Value = 0 end
+                    if tool:GetAttribute("Recoil") then tool:SetAttribute("Recoil", 0) end
+                end
             end
-        end
-        for _, tool in pairs(LocalPlayer.Character:GetChildren()) do
-            if tool:IsA("Tool") and (tool:FindFirstChild("Recoil") or tool:GetAttribute("Recoil")) then
-                if tool:FindFirstChild("Recoil") then tool.Recoil.Value = 0 end
-                if tool:GetAttribute("Recoil") then tool:SetAttribute("Recoil", 0) end
+            for _, tool in pairs(LocalPlayer.Character:GetChildren()) do
+                if tool:IsA("Tool") and (tool:FindFirstChild("Recoil") or tool:GetAttribute("Recoil")) then
+                    if tool:FindFirstChild("Recoil") then tool.Recoil.Value = 0 end
+                    if tool:GetAttribute("Recoil") then tool:SetAttribute("Recoil", 0) end
+                end
             end
-        end
+        end)
     end
 end
 spawn(doRecoilGunMods)
 
-local Remote = ReplicatedStorage.Remotes.Send
+local Remote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Send")
 local oldFire
-oldFire = hookfunction(Remote.FireServer, function(self, ...)
-    if self ~= Remote then
-        return oldFire(self, ...)
-    end
-    local args = {...}
-    if SilentAimEnabled and args[2] == "shoot_gun" and CurrentTarget then
-        local head = CurrentTarget.Character:FindFirstChild("Head")
-        local hrp = CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
-        local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
-        if head and humanoid and hrp then
-            local myHeadPos = LocalPlayer.Character.Head.Position
-            local aimPart, aimPos, wallbang
-            if AttackAntiaimEnabled and isAntiAim(CurrentTarget) then
-                aimPart = hrp
-                aimPos = getSharpSilentAimPosition(hrp)
-                wallbang = true
-            else
-                aimPart = head
-                aimPos = getSharpSilentAimPosition(head)
-                wallbang = isBehindWall(myHeadPos, aimPos)
-            end
-            local distance = (aimPos - myHeadPos).Magnitude
+if Remote then
+    oldFire = hookfunction(Remote.FireServer, function(self, ...)
+        if self ~= Remote then
+            return oldFire(self, ...)
+        end
+        local args = {...}
+        if SilentAimEnabled and args[2] == "shoot_gun" and CurrentTarget then
+            local head = CurrentTarget.Character:FindFirstChild("Head")
+            local hrp = CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
+            local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
+            if head and humanoid and hrp and humanoid.Health > 0 then
+                local myHeadPos = LocalPlayer.Character.Head.Position
+                local aimPart, aimPos, wallbang
+                if AttackAntiaimEnabled and isAntiAim(CurrentTarget) then
+                    aimPart = hrp
+                    aimPos = getSharpSilentAimPosition(hrp)
+                    wallbang = true
+                else
+                    aimPart = head
+                    aimPos = getSharpSilentAimPosition(head)
+                    wallbang = isBehindWall(myHeadPos, aimPos)
+                end
+                local distance = (aimPos - myHeadPos).Magnitude
 
-            args[4] = CFrame.new(math.huge, math.huge, math.huge)
-            args[5] = {
-                [1] = {
+                args[4] = CFrame.new(math.huge, math.huge, math.huge)
+                args[5] = {
                     [1] = {
-                        ["Instance"] = aimPart,
-                        ["Normal"] = Vector3.new(0, 1, 0),
-                        ["Position"] = aimPos,
-                        ["Wallbang"] = wallbang,
-                        ["Distance"] = distance
+                        [1] = {
+                            ["Instance"] = aimPart,
+                            ["Normal"] = Vector3.new(0, 1, 0),
+                            ["Position"] = aimPos,
+                            ["Wallbang"] = wallbang,
+                            ["Distance"] = distance
+                        }
                     }
                 }
-            }
 
-            local beam = Instance.new("Part")
-            beam.Anchored = true
-            beam.CanCollide = false
-            beam.Size = Vector3.new(0.15, 0.15, (aimPos - LocalPlayer.Character.Head.Position).Magnitude)
-            beam.CFrame = CFrame.new(LocalPlayer.Character.Head.Position, aimPos) * CFrame.new(0, 0, -beam.Size.Z/2)
-            beam.Material = Enum.Material.Neon
-            beam.Transparency = 0.25
-            beam.Parent = workspace
-            Debris:AddItem(beam, 4)
+                local beam = Instance.new("Part")
+                beam.Anchored = true
+                beam.CanCollide = false
+                beam.Size = Vector3.new(0.15, 0.15, (aimPos - LocalPlayer.Character.Head.Position).Magnitude)
+                beam.CFrame = CFrame.new(LocalPlayer.Character.Head.Position, aimPos) * CFrame.new(0, 0, -beam.Size.Z/2)
+                beam.Material = Enum.Material.Neon
+                beam.Transparency = 0.25
+                beam.Parent = workspace
+                Debris:AddItem(beam, 4)
 
-            spawn(function()
-                wait(0.1)
-                if humanoid and humanoid.Health < humanoid.MaxHealth then
-                    beam.Color = wallbang and Color3.fromRGB(0, 128, 255) or Color3.fromRGB(0, 255, 0)
-                else
-                    beam.Color = Color3.fromRGB(255, 0, 0)
-                end
-            end)
+                spawn(function()
+                    wait(0.1)
+                    if humanoid and humanoid.Health < humanoid.MaxHealth then
+                        beam.Color = wallbang and Color3.fromRGB(0, 128, 255) or Color3.fromRGB(0, 255, 0)
+                    else
+                        beam.Color = Color3.fromRGB(255, 0, 0)
+                    end
+                end)
+            end
         end
-    end
-    return oldFire(self, unpack(args))
-end)
+        return oldFire(self, unpack(args))
+    end)
+end
 
+-- UI toggles
 Tab:Toggle({
     Title = "Silent Aim",
     Default = false,
@@ -457,6 +473,13 @@ local function createESP(player)
 
         local head = player.Character.Head
         local hrp = player.Character.HumanoidRootPart
+        local humanoid = player.Character:FindFirstChild("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then
+            for _, line in pairs(lines) do line.Visible = false end
+            nameText.Visible = false
+            itemText.Visible = false
+            return
+        end
 
         local topWorld = head.Position + Vector3.new(0, 1, 0)
         local bottomWorld = hrp.Position - Vector3.new(0, 3.5, 0)
