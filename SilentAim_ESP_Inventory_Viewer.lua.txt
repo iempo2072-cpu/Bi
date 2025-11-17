@@ -1,3 +1,4 @@
+-- โหลด WindUI
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
 local Players = game:GetService("Players")
@@ -44,10 +45,11 @@ local SilentAimEnabled = false
 local NoRecoilEnabled = true
 local FOVRadius = 120
 local AttackAntiaimEnabled = true
-local AntiAimEnabled = false -- ปุ่มเปิดปิด Antiaim
+local AntiAimEnabled = false
+local CSYNC_AntiAimEnabled = false
 
 local ConstantBulletSpeed = 4000
-local ConstantPingTime = 0.02 -- ดักปิง 20 ms
+local ConstantPingTime = 0.02 -- 20 ms
 
 local SilentFOVCircle = Drawing.new("Circle")
 SilentFOVCircle.Color = Color3.fromRGB(255, 255, 0)
@@ -64,81 +66,43 @@ Tracer.Color = Color3.fromRGB(0, 255, 255)
 Tracer.Transparency = 1
 Tracer.Visible = false
 
-local function isBehindWall(startPos, endPos)
-    if (startPos - endPos).Magnitude < 2 then return false end
-    local ignore = {LocalPlayer.Character}
-    if CurrentTarget and CurrentTarget.Character then
-        table.insert(ignore, CurrentTarget.Character)
-    end
-    local params = RaycastParams.new()
-    params.FilterDescendantsInstances = ignore
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.IgnoreWater = true
-    local direction = (endPos - startPos).Unit
-    local distance = (endPos - startPos).Magnitude
-    local rayResult = workspace:Raycast(startPos, direction * distance, params)
-    if rayResult and rayResult.Instance then
-        if not (rayResult.Instance:IsDescendantOf(CurrentTarget.Character) or rayResult.Instance:IsDescendantOf(LocalPlayer.Character)) then
-            return true
-        end
-    end
-    return false
+-- CSYNC antiaim
+local lastCSYNCPos = nil
+local csyncRadius = 2.5
+local csyncInterval = 0.2
+local csyncLastTick = tick()
+
+local function csyncTeleport()
+    if not CSYNC_AntiAimEnabled or not LocalPlayer.Character or not HumanoidRootPart then return end
+    local angle = math.random() * math.pi * 2
+    local offset = Vector3.new(math.cos(angle), 0, math.sin(angle)) * csyncRadius
+    lastCSYNCPos = HumanoidRootPart.Position + offset
+    HumanoidRootPart.CFrame = CFrame.new(lastCSYNCPos)
 end
 
--- UPGRADED Antiaim: หัวหมุนไว หรือ เดินหน้าถอยหลังในแกน Z เร็วกว่า 25 หรือวิ่งด้านข้างในแกน X เร็วกว่า 25
-local function isAntiAim(player)
-    if not AntiAimEnabled then return false end -- เช็คสถานะปุ่มเปิด/ปิด
-    if player.Character then
-        local head = player.Character:FindFirstChild("Head")
-        local hrp = player.Character:FindFirstChild("HumanoidRootPart")
-        if head and hrp then
-            local head_velocity = head.Velocity
-            local hrp_velocity = hrp.Velocity
-            local z_speed = math.abs(hrp_velocity.Z)
-            local x_speed = math.abs(hrp_velocity.X)
-            if head_velocity.magnitude > 40 or z_speed > 25 or x_speed > 25 then
-                return true
+if getrawmetatable and hookmetamethod then
+    local mt = getrawmetatable(game)
+    local oldNC = mt.__namecall
+    setreadonly(mt, false)
+    hookmetamethod(game, "__namecall", function(self, ...)
+        if CSYNC_AntiAimEnabled and tostring(self) == "UpdateCharacter" and typeof(self) == "Instance" then
+            local args = {...}
+            if args[2] and typeof(args[2]) == "CFrame" then
+                args[2] = CFrame.new(lastCSYNCPos or HumanoidRootPart.Position)
+                return oldNC(self, unpack(args))
             end
         end
-    end
-    return false
-end
-
-local function getPredictedPos(part)
-    local velocity = part.Velocity or Vector3.zero
-    return part.Position + (velocity * ConstantPingTime)
-end
-
-local function getClosestTarget()
-    local closest = nil
-    local shortestDistance = math.huge
-    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
-            local head = player.Character.Head
-            local pos, onScreen = Camera:WorldToViewportPoint(head.Position)
-            if onScreen then
-                local screenPos = Vector2.new(pos.X, pos.Y)
-                local distFromCenter = (screenPos - center).Magnitude
-                if distFromCenter <= FOVRadius then
-                    local toTarget = (head.Position - Camera.CFrame.Position).Unit
-                    local forward = Camera.CFrame.LookVector
-                    local dot = forward:Dot(toTarget)
-                    if dot > 0.5 then
-                        local distance3D = (head.Position - LocalPlayer.Character.Head.Position).Magnitude
-                        if distance3D < shortestDistance then
-                            shortestDistance = distance3D
-                            closest = player
-                        end
-                    end
-                end
-            end
-        end
-    end
-    return closest
+        return oldNC(self, ...)
+    end)
+    setreadonly(mt, true)
 end
 
 RunService.RenderStepped:Connect(function()
+    if CSYNC_AntiAimEnabled and (tick()-csyncLastTick)>=csyncInterval then
+        csyncTeleport()
+        csyncLastTick = tick()
+    end
+
     SilentFOVCircle.Visible = SilentAimEnabled
     SilentFOVCircle.Position = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
     SilentFOVCircle.Radius = FOVRadius
@@ -172,6 +136,87 @@ RunService.RenderStepped:Connect(function()
         Tracer.Visible = false
     end
 end)
+
+local function isBehindWall(startPos, endPos)
+    if (startPos - endPos).Magnitude < 2 then return false end
+    local ignore = {LocalPlayer.Character}
+    if CurrentTarget and CurrentTarget.Character then
+        table.insert(ignore, CurrentTarget.Character)
+    end
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = ignore
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.IgnoreWater = true
+    local direction = (endPos - startPos).Unit
+    local distance = (endPos - startPos).Magnitude
+    local rayResult = workspace:Raycast(startPos, direction * distance, params)
+    if rayResult and rayResult.Instance then
+        if not (rayResult.Instance:IsDescendantOf(CurrentTarget.Character) or rayResult.Instance:IsDescendantOf(LocalPlayer.Character)) then
+            return true
+        end
+    end
+    return false
+end
+
+local function isAntiAim(player)
+    if not AntiAimEnabled then return false end
+    if player.Character then
+        local head = player.Character:FindFirstChild("Head")
+        local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+        if head and hrp then
+            local head_velocity = head.Velocity
+            local hrp_velocity = hrp.Velocity
+            local z_speed = math.abs(hrp_velocity.Z)
+            local x_speed = math.abs(hrp_velocity.X)
+            if head_velocity.magnitude > 40 or z_speed > 25 or x_speed > 25 then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function getSharpSilentAimPosition(targetPart)
+    if not targetPart or not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("Head") then return targetPart.Position end
+    local myPos = LocalPlayer.Character.Head.Position
+    local targetPos = targetPart.Position
+    local targetVel = targetPart.Velocity or Vector3.zero
+    local distance = (targetPos - myPos).Magnitude
+
+    local bulletTime = distance / ConstantBulletSpeed
+    local predictTime = bulletTime + ConstantPingTime
+    local futurePos = targetPos + (targetVel * predictTime)
+    return futurePos
+end
+
+local function getClosestTarget()
+    local closest = nil
+    local shortestDistance = math.huge
+    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
+            local head = player.Character.Head
+            local pos, onScreen = Camera:WorldToViewportPoint(head.Position)
+            if onScreen then
+                local screenPos = Vector2.new(pos.X, pos.Y)
+                local distFromCenter = (screenPos - center).Magnitude
+                if distFromCenter <= FOVRadius then
+                    local toTarget = (head.Position - Camera.CFrame.Position).Unit
+                    local forward = Camera.CFrame.LookVector
+                    local dot = forward:Dot(toTarget)
+                    if dot > 0.5 then
+                        local distance3D = (head.Position - LocalPlayer.Character.Head.Position).Magnitude
+                        if distance3D < shortestDistance then
+                            shortestDistance = distance3D
+                            closest = player
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return closest
+end
 
 local function doRecoilGunMods()
     while true do
@@ -208,11 +253,11 @@ oldFire = hookfunction(Remote.FireServer, function(self, ...)
             local aimPart, aimPos, wallbang
             if AttackAntiaimEnabled and isAntiAim(CurrentTarget) then
                 aimPart = hrp
-                aimPos = hrp.Position
+                aimPos = getSharpSilentAimPosition(hrp)
                 wallbang = true
             else
                 aimPart = head
-                aimPos = getPredictedPos(head)
+                aimPos = getSharpSilentAimPosition(head)
                 wallbang = isBehindWall(myHeadPos, aimPos)
             end
             local distance = (aimPos - myHeadPos).Magnitude
@@ -270,7 +315,7 @@ Tab:Toggle({
 })
 
 Tab:Toggle({
-    Title = "Attack Antiaim (ยิงตรงจุดคนหมุนหัว โดนแน่นอน)",
+    Title = "Attack Antiaim (ยิงทะลุ HRP/anti-aim)",
     Default = true,
     Callback = function(state)
         AttackAntiaimEnabled = state
@@ -278,10 +323,18 @@ Tab:Toggle({
 })
 
 Tab:Toggle({
-    Title = "Antiaim (ตรวจสอบความเร็วเป้าหมาย/เปิดฟังก์ชันนี้)",
+    Title = "Antiaim (ตรวจจับความเร็วเป้าหมาย/หัวหมุนไว)",
     Default = false,
     Callback = function(state)
         AntiAimEnabled = state
+    end
+})
+
+Tab:Toggle({
+    Title = "CSYNC Antiaim (hookmetamethod สลับตำแหน่งใกล้ๆและ sync กับ server)",
+    Default = false,
+    Callback = function(state)
+        CSYNC_AntiAimEnabled = state
     end
 })
 
@@ -301,6 +354,7 @@ Tab:Slider({
 -------------------------------
 -- ESP Tab & Logic ------------
 -------------------------------
+
 local Tab_ESP = Window:Tab({
     Title = "ESP",
     Icon = "eye",
@@ -372,7 +426,7 @@ local function createESP(player)
         right = Drawing.new("Line"),
     }
     local nameText = Drawing.new("Text")
-    nameText.Size = 16
+    nameText.Size = 11
     nameText.Center = true
     nameText.Outline = true
     nameText.Color = Color3.fromRGB(255, 0, 0)
@@ -438,7 +492,7 @@ local function createESP(player)
             if nameESPEnabled then
                 local distance = (head.Position - LocalPlayer.Character.Head.Position).Magnitude
                 nameText.Text = player.Name .. string.format(" [%.1fm]", distance)
-                nameText.Position = Vector2.new(top.X, y - 16)
+                nameText.Position = Vector2.new(top.X, y - 9)
                 nameText.Visible = true
             else
                 nameText.Visible = false
