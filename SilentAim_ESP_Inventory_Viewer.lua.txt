@@ -1,4 +1,3 @@
--- โหลด WindUI
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
 local Players = game:GetService("Players")
@@ -16,7 +15,7 @@ local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 local Mouse = LocalPlayer:GetMouse()
 
 local Window = WindUI:CreateWindow({
-    Title = "god hub🌍 | v0.1a  | ",
+    Title = "god hub🌍 | v0.1m  | ",
     Icon = "menu",
     Author = "🦅",
     Folder = "yomoHubkFolder",
@@ -44,9 +43,11 @@ local Tab = Window:Tab({Title = "Silent Aim", Icon = "crosshair"})
 local SilentAimEnabled = false
 local NoRecoilEnabled = true
 local FOVRadius = 120
-local AttackAntiaimEnabled = true -- เพิ่มปุ่มเปิดปิด
+local AttackAntiaimEnabled = true
+local AntiAimEnabled = false -- ปุ่มเปิดปิด Antiaim
 
-local ConstantBulletSpeed = 10000
+local ConstantBulletSpeed = 4000
+local ConstantPingTime = 0.02 -- ดักปิง 20 ms
 
 local SilentFOVCircle = Drawing.new("Circle")
 SilentFOVCircle.Color = Color3.fromRGB(255, 255, 0)
@@ -63,7 +64,6 @@ Tracer.Color = Color3.fromRGB(0, 255, 255)
 Tracer.Transparency = 1
 Tracer.Visible = false
 
--- Raycast เช็กกำแพง
 local function isBehindWall(startPos, endPos)
     if (startPos - endPos).Magnitude < 2 then return false end
     local ignore = {LocalPlayer.Character}
@@ -85,14 +85,18 @@ local function isBehindWall(startPos, endPos)
     return false
 end
 
--- ตรวจสอบ Antiaim (ถ้าหัวหมุนหรือเคลื่อนเร็วผิดปกติ)
+-- UPGRADED Antiaim: หัวหมุนไว หรือ เดินหน้าถอยหลังในแกน Z เร็วกว่า 25 หรือวิ่งด้านข้างในแกน X เร็วกว่า 25
 local function isAntiAim(player)
-    if player.Character and player.Character:FindFirstChild("Head") then
-        local head = player.Character.Head
+    if not AntiAimEnabled then return false end -- เช็คสถานะปุ่มเปิด/ปิด
+    if player.Character then
+        local head = player.Character:FindFirstChild("Head")
         local hrp = player.Character:FindFirstChild("HumanoidRootPart")
         if head and hrp then
-            local velocity = head.Velocity
-            if velocity.magnitude > 40 then -- กำหนด threshold
+            local head_velocity = head.Velocity
+            local hrp_velocity = hrp.Velocity
+            local z_speed = math.abs(hrp_velocity.Z)
+            local x_speed = math.abs(hrp_velocity.X)
+            if head_velocity.magnitude > 40 or z_speed > 25 or x_speed > 25 then
                 return true
             end
         end
@@ -100,11 +104,15 @@ local function isAntiAim(player)
     return false
 end
 
+local function getPredictedPos(part)
+    local velocity = part.Velocity or Vector3.zero
+    return part.Position + (velocity * ConstantPingTime)
+end
+
 local function getClosestTarget()
     local closest = nil
     local shortestDistance = math.huge
     local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
             local head = player.Character.Head
@@ -127,7 +135,6 @@ local function getClosestTarget()
             end
         end
     end
-
     return closest
 end
 
@@ -198,20 +205,23 @@ oldFire = hookfunction(Remote.FireServer, function(self, ...)
         local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
         if head and humanoid and hrp then
             local myHeadPos = LocalPlayer.Character.Head.Position
-            local aimPos
+            local aimPart, aimPos, wallbang
             if AttackAntiaimEnabled and isAntiAim(CurrentTarget) then
+                aimPart = hrp
                 aimPos = hrp.Position
+                wallbang = true
             else
-                aimPos = head.Position
+                aimPart = head
+                aimPos = getPredictedPos(head)
+                wallbang = isBehindWall(myHeadPos, aimPos)
             end
             local distance = (aimPos - myHeadPos).Magnitude
-            local wallbang = isBehindWall(myHeadPos, aimPos)
 
             args[4] = CFrame.new(math.huge, math.huge, math.huge)
             args[5] = {
                 [1] = {
                     [1] = {
-                        ["Instance"] = (AttackAntiaimEnabled and isAntiAim(CurrentTarget)) and hrp or head,
+                        ["Instance"] = aimPart,
                         ["Normal"] = Vector3.new(0, 1, 0),
                         ["Position"] = aimPos,
                         ["Wallbang"] = wallbang,
@@ -260,10 +270,18 @@ Tab:Toggle({
 })
 
 Tab:Toggle({
-    Title = "Attack Antiaim (ยิงตรงจุดคนหมุนหัว)",
+    Title = "Attack Antiaim (ยิงตรงจุดคนหมุนหัว โดนแน่นอน)",
     Default = true,
     Callback = function(state)
         AttackAntiaimEnabled = state
+    end
+})
+
+Tab:Toggle({
+    Title = "Antiaim (ตรวจสอบความเร็วเป้าหมาย/เปิดฟังก์ชันนี้)",
+    Default = false,
+    Callback = function(state)
+        AntiAimEnabled = state
     end
 })
 
@@ -290,8 +308,8 @@ local Tab_ESP = Window:Tab({
 
 local boxESPEnabled = false
 local nameESPEnabled = false
-local itemESPEnabled = false -- used for Inventory Viewer (player inventory)
-local itemDropESPEnabled = false -- NEW: Item Drop ESP (ของตกพื้น)
+local itemESPEnabled = false
+local itemDropESPEnabled = false
 local espPlayers = {}
 
 Tab_ESP:Toggle({
@@ -319,7 +337,7 @@ Tab_ESP:Toggle({
 })
 
 Tab_ESP:Toggle({
-    Title = "Item Drop ESP", -- ปุ่มใหม่สำหรับมองของตกพื้น
+    Title = "Item Drop ESP",
     Default = false,
     Callback = function(state)
         itemDropESPEnabled = state
