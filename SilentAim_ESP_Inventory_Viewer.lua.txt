@@ -120,10 +120,8 @@ RunService.RenderStepped:Connect(function()
         local targetHead = CurrentTarget.Character.Head
         local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
         local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
-        if not humanoid or humanoid.Health <= 0 then
-            Tracer.Visible = false
-            return
-        end
+        -- *** เอาการข้ามคนตายออก ***
+        -- (จะล็อกเป้าหมายแม้ Health = 0)
         if myHead then
             local myScreenPos, myOnScreen = Camera:WorldToViewportPoint(myHead.Position)
             local targetScreenPos, targetOnScreen = Camera:WorldToViewportPoint(targetHead.Position)
@@ -196,14 +194,14 @@ local function getSharpSilentAimPosition(targetPart)
     return futurePos
 end
 
+-- *** เอาการข้ามคนตายออก ***
 local function getClosestTarget()
     local closest = nil
     local shortestDistance = math.huge
     local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
-            local humanoid = player.Character:FindFirstChild("Humanoid")
-            if not humanoid or humanoid.Health <= 0 then goto continue end
+            -- (ไม่สนใจ Humanoid.Health <= 0)
             local head = player.Character.Head
             local pos, onScreen = Camera:WorldToViewportPoint(head.Position)
             if onScreen then
@@ -223,12 +221,11 @@ local function getClosestTarget()
                 end
             end
         end
-        ::continue::
+        -- ไม่มี ::continue:: อีกต่อไป
     end
     return closest
 end
 
--- ปรับให้ปลอดภัยขึ้น: ลด loop frequency และ encase ใน pcall
 local function doRecoilGunMods()
     while true do
         wait(2)
@@ -262,7 +259,8 @@ if Remote then
             local head = CurrentTarget.Character:FindFirstChild("Head")
             local hrp = CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
             local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
-            if head and humanoid and hrp and humanoid.Health > 0 then
+            -- ยิงหาทุกคนที่มี Character/Head/HRP/Humanoid โดยไม่แคร์ Health
+            if head and humanoid and hrp then
                 local myHeadPos = LocalPlayer.Character.Head.Position
                 local aimPart, aimPos, wallbang
                 if AttackAntiaimEnabled and isAntiAim(CurrentTarget) then
@@ -474,13 +472,8 @@ local function createESP(player)
         local head = player.Character.Head
         local hrp = player.Character.HumanoidRootPart
         local humanoid = player.Character:FindFirstChild("Humanoid")
-        if not humanoid or humanoid.Health <= 0 then
-            for _, line in pairs(lines) do line.Visible = false end
-            nameText.Visible = false
-            itemText.Visible = false
-            return
-        end
-
+        -- *** เอาการข้ามคนตายออก ***
+        -- ESP แสดงทุกคนที่มี Character/Head/HRP/Humanoid ไม่สน Health
         local topWorld = head.Position + Vector3.new(0, 1, 0)
         local bottomWorld = hrp.Position - Vector3.new(0, 3.5, 0)
 
