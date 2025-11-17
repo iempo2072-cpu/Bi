@@ -2305,7 +2305,7 @@ local AntiLockToggle =
         Callback = function(state)
             getgenv().Sky = state
             if state then
-                getgenv().SkyAmount = 1500
+                getgenv().SkyAmount = 3000
             end
         end
     }
@@ -2323,7 +2323,7 @@ local AntiKillToggle =
                     WindUI:Notify(
                         {
                             Title = "🛡️ Anti Kill Enabled",
-                            Description = "คุณจะวาร์ปใต้พื้นและเคลื่อนที่รอบๆ 10m เพื่อหลบการโจมตี",
+                            Description = "คุณจะวาร์ปใต้พื้นและเคลื่อนที่รอบ 10m เพื่อหลบการโจมตี",
                             Duration = 3
                         }
                     )
@@ -2495,7 +2495,7 @@ local AutoRespawnToggle =
 )
 myConfig:Register("AutoRespawn", AutoRespawnToggle)
 Tab_Character:Divider()
-Tab_Character:Section({Title = "FOR PC HOLD (Z)"})
+Tab_Character:Section({Title = "FOR PC HOLD (X)"})
 local SnapToggle =
     Tab_Character:Toggle(
     {
@@ -2521,7 +2521,7 @@ local SnapSlider =
     {
         Title = "Snap:",
         Step = 1,
-        Value = {Min = 1, Max = 50, Default = 10},
+        Value = {Min = 1, Max = 100, Default = 10},
         Callback = function(value)
             maxHeight = value
             if teleportActive and HumanoidRootPart and startY then
