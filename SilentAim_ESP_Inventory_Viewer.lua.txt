@@ -1350,83 +1350,35 @@ local function isShotgun()
     return false
 end
 local oldFire
-if Remote and Remote.FireServer then
-    local ok, res = pcall(function()
-        oldFire = hookfunction(Remote.FireServer, function(self, ...)
-            if self ~= Remote then
-                return oldFire(self, ...)
-            end
+oldFire = hookfunction(Remote.FireServer, function(self, ...)
+    if self ~= Remote then
+        return oldFire(self, ...)
+    end
+	local args = {...}
+	if SilentAimEnabled and args[2] == "shoot_gun" and CurrentTarget then
+		local head = CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("Head")
+		local hrp = CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
+		local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
+		if head and humanoid and hrp then
+			local aimPos = predictPosition(head, hrp)
+			local displacement = aimPos - head.Position
+			local hitCFrame = CurrentTarget.Character:GetPivot() + displacement
+			local previousHealth = humanoid.Health
 
-           local args = {...}
+			-- Check if target is behind a wall (calculated but not used for conditional logic in original; kept for potential future use)
+			local isObstructed = isBehindWall(LocalPlayer.Character.Head.Position, aimPos)
 
-            if SilentAimEnabled and args[2] == "shoot_gun" and CurrentTarget then
-                local head = CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("Head")
-                local hrp  = CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
+			args[4] = CFrame.new(math.huge, math.huge, math.huge)
 
-                if head and hrp then
-                    -- เพิ่มความเร็วกระสุนเป็น 4000
-                    local BULLET_SPEED = 4000
-
-                    local shootOrigin
-                    local char = LocalPlayer.Character
-                    local tool = char and char:FindFirstChildWhichIsA("Tool")
-                    local muzzle
-
-                    if tool then
-                        muzzle = tool:FindFirstChild("Muzzle") or tool:FindFirstChild("GunTip")
-                    end
-
-                    if muzzle and muzzle:IsA("BasePart") then
-                        shootOrigin = muzzle.Position
-                    else
-                        shootOrigin = char.Head.Position
-                    end
-
-                    local ping = getPing()
-                    local distance = (head.Position - shootOrigin).Magnitude
-                    local travelTime = distance / BULLET_SPEED
-                    -- ปรับการคาดการณ์ให้แม่นยำขึ้น: ใช้ travelTime และลดผลกระทบของ ping เล็กน้อย
-                    local predictedPos = head.Position + hrp.Velocity * (travelTime + ping * 0.5)
-
-                    args[4] = CFrame.new(math.huge, math.huge, math.huge)
-                    args[5] = {
-                        [1] = {
-                            [1] = {
-                                ["Instance"] = head,
-                                ["Normal"] = Vector3.new(0, 1, 0),
-                                ["Position"] = predictedPos
-                            }
-                        }
-                    }
-
-                    task.spawn(function()
-                        local beam = Instance.new("Part")
-                        beam.Anchored = true
-                        beam.CanCollide = false
-                        beam.Material = Enum.Material.Neon
-                        beam.Color = Color3.fromRGB(255, 255, 0)
-                        beam.Transparency = 0.15
-
-                        local length = (predictedPos - shootOrigin).Magnitude
-                        beam.Size = Vector3.new(0.13, 0.13, length)
-                        beam.CFrame = CFrame.new(shootOrigin, predictedPos) * CFrame.new(0, 0, -length/2)
-                        beam.Parent = Workspace
-
-                        TweenService:Create(
-                            beam,
-                            TweenInfo.new(0.15, Enum.EasingStyle.Quad),
-                            {Transparency = 1}
-                        ):Play()
-
-                        Debris:AddItem(beam, 0.2)
-                    end)
-                end
-            end
-
-            return oldFire(self, unpack(args))
-        end)
-    end)
-end
+			args[5] = {
+				[1] = {
+					[1] = {
+						["Instance"] = head,
+						["Normal"] = Vector3.new(0, 1, 0),
+						["Position"] = aimPos
+					}
+				}
+			}
                     -- ✅ เอฟเฟกต์กระสุน
                     local success, beam = pcall(function()
                         local part = Instance.new("Part")
