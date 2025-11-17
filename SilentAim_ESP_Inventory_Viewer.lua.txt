@@ -16,7 +16,7 @@ local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 local Mouse = LocalPlayer:GetMouse()
 
 local Window = WindUI:CreateWindow({
-    Title = "god hub🌍 | v0.1a  | ",
+    Title = "god hub🌍 | v0.1b  | ",
     Icon = "menu",
     Author = "🦅",
     Folder = "yomoHubkFolder",
@@ -46,7 +46,6 @@ local NoRecoilEnabled = true
 local FOVRadius = 120
 local CurrentTarget = nil
 
-local ConstantPingTime = 0.2 -- ดักปิงเป็น 200ms
 local ConstantBulletSpeed = 2000
 
 local SilentFOVCircle = Drawing.new("Circle")
@@ -86,20 +85,19 @@ local function isBehindWall(startPos, endPos)
     return false
 end
 
--- เพิ่มฟังก์ชันใหม่สำหรับการ predict แบบดัก ping 200ms
-local function predictWallbangPosition_New(head, hrp)
-    -- คำนวณตำแหน่งยิงล่วงหน้าแบบใหม่
-    local velocity = hrp and hrp.Velocity or Vector3.zero
-    local origin = Camera.CFrame.Position
-    local toTarget = head.Position - origin
-    local distance = toTarget.Magnitude
-
-    -- กระสุนและ ping แบบใหม่
-    local bulletTime = distance / ConstantBulletSpeed
-    local predictTime = bulletTime + ConstantPingTime
-
-    -- ยิงล่วงหน้าตาม vector ความเร็วของเป้าหมาย
-    return head.Position + (velocity * predictTime)
+-- ตรวจสอบ Antiaim: ถ้าหัวเคลื่อนเร็วผิดปกติ ให้ยิงที่ HRP แทน
+local function isAntiAim(player)
+    if player.Character and player.Character:FindFirstChild("Head") then
+        local head = player.Character.Head
+        local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+        if head and hrp then
+            local velocity = head.Velocity
+            if velocity.magnitude > 40 then -- ปรับ threshold ได้
+                return true
+            end
+        end
+    end
+    return false
 end
 
 local function getClosestTarget()
@@ -196,31 +194,29 @@ oldFire = hookfunction(Remote.FireServer, function(self, ...)
     end
     local args = {...}
     if SilentAimEnabled and args[2] == "shoot_gun" and CurrentTarget then
-        local head = CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("Head")
-        local hrp = CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
+        local head = CurrentTarget.Character:FindFirstChild("Head")
+        local hrp = CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
         local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
         if head and humanoid and hrp then
             local myHeadPos = LocalPlayer.Character.Head.Position
-            local targetPos = head.Position
-
-            local wallbang = isBehindWall(myHeadPos, targetPos)
             local aimPos
-            if wallbang then
-                -- ใช้การคำนวณใหม่เมื่อยิงทะลุ
-                aimPos = predictWallbangPosition_New(head, hrp)
+            if isAntiAim(CurrentTarget) then
+                aimPos = hrp.Position
             else
-                -- ยิงปกติที่หัว
-                aimPos = targetPos
+                aimPos = head.Position
             end
+            local distance = (aimPos - myHeadPos).Magnitude
+            local wallbang = isBehindWall(myHeadPos, aimPos)
 
             args[4] = CFrame.new(math.huge, math.huge, math.huge)
             args[5] = {
                 [1] = {
                     [1] = {
-                        ["Instance"] = head,
+                        ["Instance"] = isAntiAim(CurrentTarget) and hrp or head,
                         ["Normal"] = Vector3.new(0, 1, 0),
                         ["Position"] = aimPos,
-                        ["Wallbang"] = wallbang
+                        ["Wallbang"] = wallbang,
+                        ["Distance"] = distance
                     }
                 }
             }
@@ -281,7 +277,6 @@ Tab:Slider({
 -------------------------------
 -- ESP Tab & Logic ------------
 -------------------------------
-
 local Tab_ESP = Window:Tab({
     Title = "ESP",
     Icon = "eye",
@@ -418,7 +413,8 @@ local function createESP(player)
             end
 
             if nameESPEnabled then
-                nameText.Text = player.Name
+                local distance = (head.Position - LocalPlayer.Character.Head.Position).Magnitude
+                nameText.Text = player.Name .. string.format(" [%.1fm]", distance)
                 nameText.Position = Vector2.new(top.X, y - 16)
                 nameText.Visible = true
             else
@@ -473,9 +469,8 @@ end
 loadESP()
 
 -------------------------
--- ITEM DROP ESP (จากไฟล์ message.txt ปรับใช้กับ WindUI)
+-- ITEM DROP ESP (WindUI Tab)
 -------------------------
-
 local dropfolder = workspace:FindFirstChild("DroppedItems")
 local item_drawings = {}
 
