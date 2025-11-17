@@ -300,7 +300,8 @@ end
 local function predictPosition(head, hrp)
     local ping = getPing()
     local velocity = hrp and hrp.Velocity or Vector3.zero
-    return head.Position + (velocity * ping * 1.15)
+    -- ปรับ multiplier ให้น้อยลงเล็กน้อยเพื่อลดการชดเชยเกิน
+    return head.Position + (velocity * ping * 1.0)
 end
 local function isBehindWall(startPos, endPos)
     if not startPos or not endPos then
@@ -1356,14 +1357,15 @@ if Remote and Remote.FireServer then
                 return oldFire(self, ...)
             end
 
-            local args = {...}
+           local args = {...}
 
             if SilentAimEnabled and args[2] == "shoot_gun" and CurrentTarget then
                 local head = CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("Head")
                 local hrp  = CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
 
                 if head and hrp then
-                    local BULLET_SPEED = 6000
+                    -- เพิ่มความเร็วกระสุนเป็น 4000
+                    local BULLET_SPEED = 4000
 
                     local shootOrigin
                     local char = LocalPlayer.Character
@@ -1383,7 +1385,8 @@ if Remote and Remote.FireServer then
                     local ping = getPing()
                     local distance = (head.Position - shootOrigin).Magnitude
                     local travelTime = distance / BULLET_SPEED
-                    local predictedPos = head.Position + hrp.Velocity * (travelTime + ping)
+                    -- ปรับการคาดการณ์ให้แม่นยำขึ้น: ใช้ travelTime และลดผลกระทบของ ping เล็กน้อย
+                    local predictedPos = head.Position + hrp.Velocity * (travelTime + ping * 0.5)
 
                     args[4] = CFrame.new(math.huge, math.huge, math.huge)
                     args[5] = {
@@ -1424,7 +1427,6 @@ if Remote and Remote.FireServer then
         end)
     end)
 end
-
                     -- ✅ เอฟเฟกต์กระสุน
                     local success, beam = pcall(function()
                         local part = Instance.new("Part")
@@ -2733,7 +2735,7 @@ local ClaimAllQuestButton =
                                 return GetRemote:InvokeServer(CounterTable.func, table.unpack(args))
                             end
                             local questFrame =
-                                player:WaitForChild("PlayerGui"):WaitForChild("Quests"):WaitForChild("QuestsHolder"):WaitForChild(
+                                player:WaitForChild("PlayerGui'):WaitForChild("Quests"):WaitForChild("QuestsHolder"):WaitForChild(
                                 "QuestsScrollingFrame"
                             )
                             for _, child in ipairs(questFrame:GetChildren()) do
