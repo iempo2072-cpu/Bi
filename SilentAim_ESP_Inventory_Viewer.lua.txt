@@ -1,234 +1,51 @@
--- โหลด WindUI
-local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
-
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Camera = workspace.CurrentCamera
-local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
-local Debris = game:GetService("Debris")
-
-local LocalPlayer = Players.LocalPlayer
-local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local Humanoid = Character:FindFirstChild("Humanoid") or Character:WaitForChild("Humanoid", 5)
-local HumanoidRootPart = Character:FindFirstChild("HumanoidRootPart") or Character:WaitForChild("HumanoidRootPart", 5)
-local Mouse = LocalPlayer:GetMouse()
+-- WindUI ส่วนเดิม --
+local WindUI
+do
+    local ok, result = pcall(function()
+        return require("./src/Init")
+    end)
+    if ok then
+        WindUI = result
+    else
+        WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/refs/heads/main/dist/main.lua"))()
+    end
+end
 
 local Window = WindUI:CreateWindow({
-    Title = "god hub🌍 | v0.1p  | ",
-    Icon = "menu",
-    Author = "🦅",
-    Folder = "yomoHubkFolder",
-    Size = UDim2.fromOffset(400, 200),
-    Theme = "Dark",
-    Transparent = true,
-    Resizable = true,
+    Title = "HAN XHUB",
+    Author = "HAN XHUB",
+    Folder = "ftgshub",
+    Icon = "computer",
+    NewElements = true,
+    HideSearchBar = false,
+    OpenButton = {
+        Title = "HAN XHUB",
+        CornerRadius = UDim.new(1,0),
+        StrokeThickness = 3,
+        Enabled = true,
+        Draggable = true,
+        OnlyMobile = false,
+        Color = ColorSequence.new(Color3.fromHex("#30FF6A"), Color3.fromHex("#e7ff2f"))
+    }
 })
 
-local button = Window:EditOpenButton({
-    Title = " Menu ©",
-    Icon = "apple",
-    CornerRadius = UDim.new(0,50),
-    StrokeThickness = 2,
-    Color = ColorSequence.new(Color3.fromHSV(0, 1, 1), Color3.fromHSV(0.1, 1, 1)),
-    OnlyMobile = false,
-    Enabled = true,
-    Draggable = false,
-})
+local CombatTab = Window:Tab({Title = "Combat", Icon = "sword"})
+local ESPTab = Window:Tab({Title = "ESP", Icon = "eye"})
 
----------------------------------
--- Silent Aim Tab & Logic -----
----------------------------------
-local Tab = Window:Tab({Title = "Silent Aim", Icon = "crosshair"})
-local SilentAimEnabled = false
-local NoRecoilEnabled = true
-local FOVRadius = 120
-local AttackAntiaimEnabled = true
-local AntiAimEnabled = false
-local CSYNC_AntiAimEnabled = false
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Debris = game:GetService("Debris")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
 
-local ConstantBulletSpeed = 4000
-local ConstantPingTime = 0.02 -- 20 ms
-
-local SilentFOVCircle = Drawing.new("Circle")
-SilentFOVCircle.Color = Color3.fromRGB(255, 255, 0)
-SilentFOVCircle.Thickness = 1
-SilentFOVCircle.NumSides = 64
-SilentFOVCircle.Filled = false
-SilentFOVCircle.Transparency = 1
-SilentFOVCircle.Radius = FOVRadius
-SilentFOVCircle.Visible = false
-
-local Tracer = Drawing.new("Line")
-Tracer.Thickness = 1
-Tracer.Color = Color3.fromRGB(0, 255, 255)
-Tracer.Transparency = 1
-Tracer.Visible = false
-
--- CSYNC antiaim (ปลอดภัย: ปิดไปเลยถ้าค้างหรือ executor ไม่ support)
-local lastCSYNCPos = nil
-local csyncRadius = 2.5
-local csyncInterval = 0.2
-local csyncLastTick = tick()
-
--- ปิด hookmetamethod สำหรับ executor ฟรี/ค้าง
---[[ 
-if getrawmetatable and hookmetamethod then
-    local mt = getrawmetatable(game)
-    local oldNC = mt.__namecall
-    setreadonly(mt, false)
-    hookmetamethod(game, "__namecall", function(self, ...)
-        if CSYNC_AntiAimEnabled and tostring(self) == "UpdateCharacter" and typeof(self) == "Instance" then
-            local args = {...}
-            if args[2] and typeof(args[2]) == "CFrame" then
-                args[2] = CFrame.new(lastCSYNCPos or HumanoidRootPart.Position)
-                return oldNC(self, unpack(args))
-            end
-        end
-        return oldNC(self, ...)
-    end)
-    setreadonly(mt, true)
-end
-]]
-
-local function csyncTeleport()
-    if not CSYNC_AntiAimEnabled or not LocalPlayer.Character or not HumanoidRootPart then return end
-    local angle = math.random() * math.pi * 2
-    local offset = Vector3.new(math.cos(angle), 0, math.sin(angle)) * csyncRadius
-    lastCSYNCPos = HumanoidRootPart.Position + offset
-    HumanoidRootPart.CFrame = CFrame.new(lastCSYNCPos)
-end
-
-RunService.RenderStepped:Connect(function()
-    if CSYNC_AntiAimEnabled and (tick()-csyncLastTick)>=csyncInterval then
-        csyncTeleport()
-        csyncLastTick = tick()
-    end
-
-    SilentFOVCircle.Visible = SilentAimEnabled
-    SilentFOVCircle.Position = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
-    SilentFOVCircle.Radius = FOVRadius
-
-    if SilentAimEnabled then
-        CurrentTarget = getClosestTarget()
-    else
-        CurrentTarget = nil
-    end
-
-    if CurrentTarget and CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("Head") then
-        local targetHead = CurrentTarget.Character.Head
-        local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-        local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
-        -- *** เอาการข้ามคนตายออก ***
-        -- (จะล็อกเป้าหมายแม้ Health = 0)
-        if myHead then
-            local myScreenPos, myOnScreen = Camera:WorldToViewportPoint(myHead.Position)
-            local targetScreenPos, targetOnScreen = Camera:WorldToViewportPoint(targetHead.Position)
-            if myOnScreen and targetOnScreen then
-                Tracer.Visible = true
-                Tracer.From = Vector2.new(myScreenPos.X, myScreenPos.Y)
-                Tracer.To = Vector2.new(targetScreenPos.X, targetScreenPos.Y)
-                if humanoid then
-                    local perc = humanoid.Health / humanoid.MaxHealth
-                    Tracer.Color = Color3.fromHSV(perc * 0.333, 1, 1)
-                end
-            else
-                Tracer.Visible = false
-            end
-        end
-    else
-        Tracer.Visible = false
-    end
-end)
-
-local function isBehindWall(startPos, endPos)
-    if (startPos - endPos).Magnitude < 2 then return false end
-    local ignore = {LocalPlayer.Character}
-    if CurrentTarget and CurrentTarget.Character then
-        table.insert(ignore, CurrentTarget.Character)
-    end
-    local params = RaycastParams.new()
-    params.FilterDescendantsInstances = ignore
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.IgnoreWater = true
-    local direction = (endPos - startPos).Unit
-    local distance = (endPos - startPos).Magnitude
-    local rayResult = workspace:Raycast(startPos, direction * distance, params)
-    if rayResult and rayResult.Instance then
-        if not (rayResult.Instance:IsDescendantOf(CurrentTarget.Character) or rayResult.Instance:IsDescendantOf(LocalPlayer.Character)) then
-            return true
-        end
-    end
-    return false
-end
-
-local function isAntiAim(player)
-    if not AntiAimEnabled then return false end
-    if player.Character then
-        local head = player.Character:FindFirstChild("Head")
-        local hrp = player.Character:FindFirstChild("HumanoidRootPart")
-        if head and hrp then
-            local head_velocity = head.Velocity
-            local hrp_velocity = hrp.Velocity
-            local z_speed = math.abs(hrp_velocity.Z)
-            local x_speed = math.abs(hrp_velocity.X)
-            if head_velocity.magnitude > 40 or z_speed > 25 or x_speed > 25 then
-                return true
-            end
-        end
-    end
-    return false
-end
-
-local function getSharpSilentAimPosition(targetPart)
-    if not targetPart or not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("Head") then return targetPart.Position end
-    local myPos = LocalPlayer.Character.Head.Position
-    local targetPos = targetPart.Position
-    local targetVel = targetPart.Velocity or Vector3.zero
-    local distance = (targetPos - myPos).Magnitude
-
-    local bulletTime = distance / ConstantBulletSpeed
-    local predictTime = bulletTime + ConstantPingTime
-    local futurePos = targetPos + (targetVel * predictTime)
-    return futurePos
-end
-
--- *** เอาการข้ามคนตายออก ***
-local function getClosestTarget()
-    local closest = nil
-    local shortestDistance = math.huge
-    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
-            -- (ไม่สนใจ Humanoid.Health <= 0)
-            local head = player.Character.Head
-            local pos, onScreen = Camera:WorldToViewportPoint(head.Position)
-            if onScreen then
-                local screenPos = Vector2.new(pos.X, pos.Y)
-                local distFromCenter = (screenPos - center).Magnitude
-                if distFromCenter <= FOVRadius then
-                    local toTarget = (head.Position - Camera.CFrame.Position).Unit
-                    local forward = Camera.CFrame.LookVector
-                    local dot = forward:Dot(toTarget)
-                    if dot > 0.5 then
-                        local distance3D = (head.Position - LocalPlayer.Character.Head.Position).Magnitude
-                        if distance3D < shortestDistance then
-                            shortestDistance = distance3D
-                            closest = player
-                        end
-                    end
-                end
-            end
-        end
-        -- ไม่มี ::continue:: อีกต่อไป
-    end
-    return closest
-end
-
-local function doRecoilGunMods()
-    while true do
-        wait(2)
+-------------------------------------------------
+-- No Recoil สำหรับปืนทุกชนิด -------------------
+-------------------------------------------------
+local NoRecoilEnabled = false
+local function doNoRecoil()
+    while NoRecoilEnabled do
+        task.wait(1)
         pcall(function()
             for _, tool in pairs(LocalPlayer.Backpack:GetChildren()) do
                 if tool:IsA("Tool") and (tool:FindFirstChild("Recoil") or tool:GetAttribute("Recoil")) then
@@ -245,142 +62,162 @@ local function doRecoilGunMods()
         end)
     end
 end
-spawn(doRecoilGunMods)
 
-local Remote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Send")
-local oldFire
-if Remote then
-    oldFire = hookfunction(Remote.FireServer, function(self, ...)
-        if self ~= Remote then
-            return oldFire(self, ...)
+CombatTab:Toggle({
+    Title = "No Recoil (กันกล้องดีด)",
+    Default = false,
+    Callback = function(v)
+        NoRecoilEnabled = v
+        if v then
+            spawn(doNoRecoil)
         end
-        local args = {...}
-        if SilentAimEnabled and args[2] == "shoot_gun" and CurrentTarget then
-            local head = CurrentTarget.Character:FindFirstChild("Head")
-            local hrp = CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
-            local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
-            -- ยิงหาทุกคนที่มี Character/Head/HRP/Humanoid โดยไม่แคร์ Health
-            if head and humanoid and hrp then
-                local myHeadPos = LocalPlayer.Character.Head.Position
-                local aimPart, aimPos, wallbang
-                if AttackAntiaimEnabled and isAntiAim(CurrentTarget) then
-                    aimPart = hrp
-                    aimPos = getSharpSilentAimPosition(hrp)
-                    wallbang = true
-                else
-                    aimPart = head
-                    aimPos = getSharpSilentAimPosition(head)
-                    wallbang = isBehindWall(myHeadPos, aimPos)
-                end
-                local distance = (aimPos - myHeadPos).Magnitude
+    end
+})
 
-                args[4] = CFrame.new(math.huge, math.huge, math.huge)
-                args[5] = {
-                    [1] = {
-                        [1] = {
-                            ["Instance"] = aimPart,
-                            ["Normal"] = Vector3.new(0, 1, 0),
-                            ["Position"] = aimPos,
-                            ["Wallbang"] = wallbang,
-                            ["Distance"] = distance
-                        }
-                    }
-                }
+-------------------------------------------------
+-- Silent Aim -----------------------------------
+-------------------------------------------------
+local SilentAimEnabled = false
+local BASE_PREDICTION = 0.15
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Radius = 120
+FOVCircle.Thickness = 2
+FOVCircle.Filled = false
+FOVCircle.Color = Color3.fromRGB(255,255,0)
+FOVCircle.Visible = false
+local showFov = false
 
-                local beam = Instance.new("Part")
-                beam.Anchored = true
-                beam.CanCollide = false
-                beam.Size = Vector3.new(0.15, 0.15, (aimPos - LocalPlayer.Character.Head.Position).Magnitude)
-                beam.CFrame = CFrame.new(LocalPlayer.Character.Head.Position, aimPos) * CFrame.new(0, 0, -beam.Size.Z/2)
-                beam.Material = Enum.Material.Neon
-                beam.Transparency = 0.25
-                beam.Parent = workspace
-                Debris:AddItem(beam, 4)
+local TracerLine = Drawing.new("Line")
+TracerLine.Color = Color3.fromRGB(0,255,255)
+TracerLine.Thickness = 2
+TracerLine.Visible = false
 
-                spawn(function()
-                    wait(0.1)
-                    if humanoid and humanoid.Health < humanoid.MaxHealth then
-                        beam.Color = wallbang and Color3.fromRGB(0, 128, 255) or Color3.fromRGB(0, 255, 0)
-                    else
-                        beam.Color = Color3.fromRGB(255, 0, 0)
-                    end
-                end)
-            end
-        end
-        return oldFire(self, unpack(args))
-    end)
+CombatTab:Toggle({
+    Title = "Enable Silent Aim",
+    Default = false,
+    Callback = function(v)
+        SilentAimEnabled = v
+        TracerLine.Visible = v and TracerLine.Visible
+    end
+})
+
+CombatTab:Toggle({
+    Title = "Show FOV Circle",
+    Default = false,
+    Callback = function(v)
+        showFov = v
+        FOVCircle.Visible = v
+    end
+})
+
+CombatTab:Slider({
+    Title = "FOV Radius",
+    Step = 1,
+    Value = {Min = 50, Max = 500, Default = FOVCircle.Radius},
+    Callback = function(v)
+        FOVCircle.Radius = tonumber(v)
+    end
+})
+
+local function PredictPosition(headPart)
+    local root = headPart.Parent:FindFirstChild("HumanoidRootPart")
+    if not root then return headPart.Position end
+    local vel = root.Velocity
+    return headPart.Position + (vel * BASE_PREDICTION)
 end
 
--- UI toggles
-Tab:Toggle({
-    Title = "Silent Aim",
-    Default = false,
-    Callback = function(state)
-        SilentAimEnabled = state
+local function GetTargetPart(character)
+    return character and character:FindFirstChild("Head")
+end
+
+local function GetClosestTarget()
+    local closest
+    local shortest = math.huge
+    local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+    for _,plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character then
+            local part = GetTargetPart(plr.Character)
+            if part then
+                local screenPos,_ = Camera:WorldToViewportPoint(part.Position)
+                local dist = (Vector2.new(screenPos.X,screenPos.Y)-center).Magnitude
+                if (not showFov or dist<=FOVCircle.Radius) and dist<shortest then
+                    shortest = dist
+                    closest = plr
+                end
+            end
+        end
     end
-})
+    return closest
+end
 
-Tab:Toggle({
-    Title = "No Recoil (กันกล้องดีด)",
-    Default = true,
-    Callback = function(state)
-        NoRecoilEnabled = state
+local function SpawnDebugBullet(startPos,targetPos)
+    local dist = (targetPos-startPos).Magnitude
+    local part = Instance.new("Part")
+    part.Anchored = true
+    part.CanCollide = false
+    part.Material = Enum.Material.Neon
+    part.Size = Vector3.new(0.1,0.1,dist)
+    part.CFrame = CFrame.new(startPos,targetPos)*CFrame.new(0,0,-dist/2)
+    part.Color = Color3.fromRGB(255,50,150)
+    part.Parent = workspace
+    Debris:AddItem(part,5)
+end
+
+local send = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Send")
+local oldFire
+oldFire = hookfunction(send.FireServer,function(self,...)
+    local args = {...}
+    if SilentAimEnabled then
+        local target = GetClosestTarget()
+        if target and target.Character then
+            local head = target.Character:FindFirstChild("Head")
+            if head then
+                local aimPos = PredictPosition(head)
+                args[4] = CFrame.new(math.huge,math.huge,math.huge,0,0,0,0,0,0,0,0,0)
+                args[5] = {[1]={[1]={["Instance"]=head,["Position"]=aimPos}}}
+                local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+                if myHead then
+                    SpawnDebugBullet(myHead.Position,aimPos)
+                end
+            end
+        end
     end
-})
+    return oldFire(self,unpack(args))
+end)
 
-Tab:Toggle({
-    Title = "Attack Antiaim (ยิงทะลุ HRP/anti-aim)",
-    Default = true,
-    Callback = function(state)
-        AttackAntiaimEnabled = state
+RunService.RenderStepped:Connect(function()
+    FOVCircle.Position = Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)
+    if SilentAimEnabled then
+        local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+        local target = GetClosestTarget()
+        local targetHead = target and target.Character and target.Character:FindFirstChild("Head")
+        if myHead and targetHead then
+            local my2D = Vector2.new(Camera:WorldToViewportPoint(myHead.Position).X,Camera:WorldToViewportPoint(myHead.Position).Y)
+            local t2D = Vector2.new(Camera:WorldToViewportPoint(targetHead.Position).X,Camera:WorldToViewportPoint(targetHead.Position).Y)
+            local distFromCenter = (t2D - Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)).Magnitude
+            if not showFov or distFromCenter<=FOVCircle.Radius then
+                TracerLine.From = my2D
+                TracerLine.To = t2D
+                TracerLine.Visible = true
+            else
+                TracerLine.Visible = false
+            end
+        else
+            TracerLine.Visible = false
+        end
+    else
+        TracerLine.Visible = false
     end
-})
+end)
 
-Tab:Toggle({
-    Title = "Antiaim (ตรวจจับความเร็วเป้าหมาย/หัวหมุนไว)",
-    Default = false,
-    Callback = function(state)
-        AntiAimEnabled = state
-    end
-})
-
-Tab:Toggle({
-    Title = "CSYNC Antiaim (hookmetamethod สลับตำแหน่งใกล้ๆและ sync กับ server)",
-    Default = false,
-    Callback = function(state)
-        CSYNC_AntiAimEnabled = state
-    end
-})
-
-Tab:Slider({
-    Title = "FOV: ",
-    Step = 1,
-    Value = {
-        Min = 20,
-        Max = 500,
-        Default = FOVRadius,
-    },
-    Callback = function(value)
-        FOVRadius = tonumber(value) or 120
-    end
-})
-
--------------------------------
--- ESP Tab & Logic ------------
--------------------------------
-
-local Tab_ESP = Window:Tab({
-    Title = "ESP",
-    Icon = "eye",
-})
-
+-------------------------------------------------
+-- ESP ระบบบ็อกซ์/ชื่อ --------------------------
+-------------------------------------------------
 local boxESPEnabled = false
 local nameESPEnabled = false
-local itemESPEnabled = false
-local itemDropESPEnabled = false
 local espPlayers = {}
 
-Tab_ESP:Toggle({
+ESPTab:Toggle({
     Title = "Box ESP",
     Default = false,
     Callback = function(state)
@@ -388,49 +225,13 @@ Tab_ESP:Toggle({
     end
 })
 
-Tab_ESP:Toggle({
+ESPTab:Toggle({
     Title = "Name ESP",
     Default = false,
     Callback = function(state)
         nameESPEnabled = state
     end
 })
-
-Tab_ESP:Toggle({
-    Title = "Inventory Viewer ESP",
-    Default = false,
-    Callback = function(state)
-        itemESPEnabled = state
-    end
-})
-
-Tab_ESP:Toggle({
-    Title = "Item Drop ESP",
-    Default = false,
-    Callback = function(state)
-        itemDropESPEnabled = state
-    end
-})
-
-local function getPlayerInventory(player)
-    local inv = {}
-    local backpack = player:FindFirstChildOfClass("Backpack")
-    if backpack then
-        for _, item in pairs(backpack:GetChildren()) do
-            if item.Name and item:IsA("Tool") then
-                table.insert(inv, item.Name)
-            end
-        end
-    end
-    if player.Character then
-        for _, obj in pairs(player.Character:GetChildren()) do
-            if obj:IsA("Tool") then
-                table.insert(inv, "[E] " .. obj.Name)
-            end
-        end
-    end
-    return inv
-end
 
 local function createESP(player)
     local lines = {
@@ -440,57 +241,38 @@ local function createESP(player)
         right = Drawing.new("Line"),
     }
     local nameText = Drawing.new("Text")
-    nameText.Size = 11
+    nameText.Size = 16
     nameText.Center = true
     nameText.Outline = true
     nameText.Color = Color3.fromRGB(255, 0, 0)
-
-    local itemText = Drawing.new("Text")
-    itemText.Size = 15
-    itemText.Center = true
-    itemText.Outline = true
-    itemText.Color = Color3.fromRGB(0, 255, 128)
-
+    nameText.Visible = false
     for _, line in pairs(lines) do
         line.Color = Color3.new(1, 1, 1)
         line.Thickness = 1
         line.Visible = false
     end
-    nameText.Visible = false
-    itemText.Visible = false
-
-    local drawings = {lines.top, lines.bottom, lines.left, lines.right, nameText, itemText}
-
+    local drawings = {lines.top, lines.bottom, lines.left, lines.right, nameText}
     local conn = RunService.RenderStepped:Connect(function()
         if not player.Character or not player.Character:FindFirstChild("Head") or not player.Character:FindFirstChild("HumanoidRootPart") then
             for _, line in pairs(lines) do line.Visible = false end
             nameText.Visible = false
-            itemText.Visible = false
             return
         end
-
         local head = player.Character.Head
         local hrp = player.Character.HumanoidRootPart
-        local humanoid = player.Character:FindFirstChild("Humanoid")
-        -- *** เอาการข้ามคนตายออก ***
-        -- ESP แสดงทุกคนที่มี Character/Head/HRP/Humanoid ไม่สน Health
         local topWorld = head.Position + Vector3.new(0, 1, 0)
         local bottomWorld = hrp.Position - Vector3.new(0, 3.5, 0)
-
         local top, onTop = Camera:WorldToViewportPoint(topWorld)
         local bottom, onBottom = Camera:WorldToViewportPoint(bottomWorld)
-
         if onTop and onBottom and top.Z > 0 and bottom.Z > 0 then
             local height = math.abs(top.Y - bottom.Y) * 1.2
             local width = height / 1.5
             local x = top.X - width / 2
             local y = top.Y - height * 0.1
-
             local tl = Vector2.new(x, y)
             local tr = Vector2.new(x + width, y)
             local bl = Vector2.new(x, y + height)
             local br = Vector2.new(x + width, y + height)
-
             if boxESPEnabled then
                 lines.top.From = tl
                 lines.top.To = tr
@@ -504,31 +286,18 @@ local function createESP(player)
             else
                 for _, line in pairs(lines) do line.Visible = false end
             end
-
             if nameESPEnabled then
-                local distance = (head.Position - LocalPlayer.Character.Head.Position).Magnitude
-                nameText.Text = player.Name .. string.format(" [%.1fm]", distance)
-                nameText.Position = Vector2.new(top.X, y - 9)
+                nameText.Text = player.Name
+                nameText.Position = Vector2.new(top.X, y - 16)
                 nameText.Visible = true
             else
                 nameText.Visible = false
             end
-
-            if itemESPEnabled then
-                local items = getPlayerInventory(player)
-                itemText.Text = #items > 0 and "ของ: " .. table.concat(items, ", ") or ""
-                itemText.Position = Vector2.new(top.X, y + height + 15)
-                itemText.Visible = #items > 0
-            else
-                itemText.Visible = false
-            end
         else
             for _, line in pairs(lines) do line.Visible = false end
             nameText.Visible = false
-            itemText.Visible = false
         end
     end)
-
     espPlayers[player] = {conn = conn, drawings = drawings}
 end
 
@@ -538,7 +307,6 @@ local function loadESP()
             createESP(player)
         end
     end
-
     Players.PlayerAdded:Connect(function(player)
         if player ~= LocalPlayer then
             player.CharacterAdded:Connect(function()
@@ -547,7 +315,6 @@ local function loadESP()
             end)
         end
     end)
-
     Players.PlayerRemoving:Connect(function(player)
         if espPlayers[player] then
             espPlayers[player].conn:Disconnect()
@@ -560,90 +327,3 @@ local function loadESP()
 end
 
 loadESP()
-
--------------------------
--- ITEM DROP ESP (WindUI Tab)
--------------------------
-local dropfolder = workspace:FindFirstChild("DroppedItems")
-local item_drawings = {}
-
-local function Get2DPos(part)
-    local success, pos, onScreen = pcall(function()
-        return Camera:WorldToViewportPoint(part.Position)
-    end)
-    if success then
-        return Vector2.new(pos.X, pos.Y), pos.Z, onScreen
-    end
-    return Vector2.new(0,0), 0, false
-end
-
-RunService.RenderStepped:Connect(function()
-    if not itemDropESPEnabled then
-        for _, d in pairs(item_drawings) do
-            if d.box then d.box.Visible = false end
-            if d.name then d.name.Visible = false end
-            if d.dist then d.dist.Visible = false end
-        end
-        return
-    end
-
-    if not dropfolder then return end
-
-    for obj, d in pairs(item_drawings) do
-        if not obj or not obj.Parent then
-            if d.box then d.box:Remove() end
-            if d.name then d.name:Remove() end
-            if d.dist then d.dist:Remove() end
-            item_drawings[obj] = nil
-        end
-    end
-
-    for _, item in pairs(dropfolder:GetChildren()) do
-        if item:IsA("Model") and item:FindFirstChild("PickUpZone") and not item:GetAttribute('Locked') then
-            local esp = item_drawings[item]
-            if not esp then
-                esp = {
-                    box = Drawing.new("Square"),
-                    name = Drawing.new("Text"),
-                    dist = Drawing.new("Text")
-                }
-                esp.box.Color = Color3.fromRGB(255,255,255)
-                esp.box.Thickness = 1
-                esp.box.Filled = false
-
-                esp.name.Color = Color3.fromRGB(255,255,255)
-                esp.name.Size = 15
-                esp.name.Center = true
-                esp.name.Outline = true
-
-                esp.dist.Color = Color3.fromRGB(0,255,128)
-                esp.dist.Size = 15
-                esp.dist.Center = true
-                esp.dist.Outline = true
-
-                item_drawings[item] = esp
-            end
-
-            local pos, depth, on = Get2DPos(item.PickUpZone)
-            if on and depth > 0 then
-                local sizescale = math.clamp(100 / depth, 20, 40)
-                esp.box.Size = Vector2.new(sizescale, sizescale)
-                esp.box.Position = Vector2.new(pos.X - sizescale/2, pos.Y - sizescale/2)
-                esp.box.Visible = true
-
-                esp.name.Text = item.Name
-                esp.name.Position = Vector2.new(pos.X, pos.Y - sizescale/2 - 10)
-                esp.name.Visible = true
-
-                local AmountItem = item:FindFirstChild("AmountBillboardGui") and item.AmountBillboardGui:FindFirstChild("TextLabel")
-                esp.dist.Text = "["..(AmountItem and AmountItem.Text or "?").."]"
-                esp.dist.Position = Vector2.new(pos.X, pos.Y + sizescale/2 + 5)
-                esp.dist.Visible = true
-            else
-                esp.box.Visible = false
-                esp.name.Visible = false
-                esp.dist.Visible = false
-            end
-        end
-    end
-end)
