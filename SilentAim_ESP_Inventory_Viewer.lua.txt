@@ -1,4 +1,4 @@
--- WindUI config/boot --
+-- WindUI ส่วนเดิม --
 local WindUI
 do
     local ok, result = pcall(function()
@@ -41,12 +41,12 @@ local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
 -------------------------------------------------
--- AntiAim TAB & โค้ด (Toggle เปิด/ปิด)
+-- TAB: AntiAim (เปิด/ปิด ไม่มั่ว attach anti aim)
 -------------------------------------------------
 local aaEnabled = false
-local aaRadius = 14
-local aaSpeed = 0.085
-local velocityPower = 90
+local aaRadius = 8     -- ลดจาก 14 ให้ smooth
+local aaSpeed = 0.15   -- ความถี่สูงขึ้น (ช้าลง)
+local velocityPower = 35
 local hrp
 local aaConn
 
@@ -56,23 +56,22 @@ AntiAimTab:Toggle({
     Callback = function(state)
         aaEnabled = state
         if state then
-            WindUI:Notify({Title = "✅ AntiAim เปิด!", Description = "คุณส่าย HRP+สุ่ม Velocity", Duration = 2.5})
+            WindUI:Notify({Title = "✅ AntiAim เปิด!", Description = "HRP ของคุณจะส่ายเร็วและหลอก velocity", Duration = 2.5})
             if aaConn then aaConn:Disconnect() end
             aaConn = RunService.RenderStepped:Connect(function()
                 hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
                 if not hrp then return end
-                -- เฉพาะตอน AntiAim เปิดเท่านั้น!
                 if aaEnabled then
                     local tickTime = tick()
-                    local offsetX = math.cos(tickTime * 85) * aaRadius
-                    local offsetZ = math.sin(tickTime * 120) * aaRadius
+                    local offsetX = math.cos(tickTime * 17) * aaRadius
+                    local offsetZ = math.sin(tickTime * 29) * aaRadius
                     local centerY = hrp.Position.Y
                     hrp.CFrame = CFrame.new(hrp.Position.X + offsetX, centerY, hrp.Position.Z + offsetZ)
-                    hrp.Velocity = Vector3.new(math.random(-velocityPower, velocityPower), math.random(-20,20), math.random(-velocityPower, velocityPower))
+                    hrp.Velocity = Vector3.new(math.random(-velocityPower, velocityPower), math.random(-10,10), math.random(-velocityPower, velocityPower))
                 end
             end)
         else
-            WindUI:Notify({Title = "🔻 AntiAim ปิด", Description = "โหมดกลับปกติ", Duration = 2})
+            WindUI:Notify({Title = "🔻 AntiAim ปิด", Description = "กลับสู่ค่าปกติ", Duration = 2})
             if aaConn then aaConn:Disconnect() aaConn = nil end
             hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
             if hrp then hrp.Velocity = Vector3.new(0,0,0) end
@@ -84,14 +83,14 @@ AntiAimTab:Button({
     Title = "แจ้งสถานะ AntiAim",
     Callback = function()
         if aaEnabled then
-            WindUI:Notify({Title = "AntiAim: กำลังทำงาน!", Description = "HRP กำลังส่ายสุด/หลอก Velocity", Duration = 2})
+            WindUI:Notify({Title = "AntiAim: กำลังทำงาน", Description = "HRP กำลังส่าย smooth ไม่กระตุก", Duration = 2})
         else
-            WindUI:Notify({Title = "AntiAim: ปิดอยู่!", Description = "กดเปิด AntiAim Tab เพื่อเริ่ม", Duration = 2})
+            WindUI:Notify({Title = "AntiAim: ปิดอยู่!", Description = "กดเปิด Toggle!", Duration = 2})
         end
     end
 })
 
--- HookMetamethod: UI/ESP ของเรายังเห็นตำแหน่งปกติ
+-- ให้ ESP/ตัวเองเห็นตำแหน่งปกติ
 local mt = getrawmetatable(game)
 setreadonly(mt, false)
 local old_index = mt.__index
@@ -104,9 +103,43 @@ mt.__index = function(obj, key)
 end
 setreadonly(mt, true)
 
+-------------------------------------------------
+-- No Recoil สำหรับปืนทุกชนิด (ปรับให้ stable)
+-------------------------------------------------
+local NoRecoilEnabled = false
+local function doNoRecoil()
+    while NoRecoilEnabled do
+        wait(0.25) -- ปรับทุก 0.25 วิ ไม่ต้องเร็วเกิน
+        pcall(function()
+            for _, tool in pairs(LocalPlayer.Backpack:GetChildren()) do
+                if tool:IsA("Tool") then
+                    if tool:FindFirstChild("Recoil") then tool.Recoil.Value = 0 end
+                    if tool:GetAttribute("Recoil") then tool:SetAttribute("Recoil", 0) end
+                end
+            end
+            for _, tool in pairs(LocalPlayer.Character:GetChildren()) do
+                if tool:IsA("Tool") then
+                    if tool:FindFirstChild("Recoil") then tool.Recoil.Value = 0 end
+                    if tool:GetAttribute("Recoil") then tool:SetAttribute("Recoil", 0) end
+                end
+            end
+        end)
+    end
+end
+
+CombatTab:Toggle({
+    Title = "No Recoil (กันกล้องดีด)",
+    Default = false,
+    Callback = function(v)
+        NoRecoilEnabled = v
+        if v then
+            spawn(doNoRecoil)
+        end
+    end
+})
 
 -------------------------------------------------
--- Silent Aim (Auto AntiAim TARGET detect only, NO toggle for attach anti aim)
+-- Silent Aim (Auto HRP/AntiAim Detect เท่านั้น แนบตามเป้าหมาย ไม่มั่ว)
 -------------------------------------------------
 local SilentAimEnabled = false
 local BASE_PREDICTION = 0.14
@@ -215,14 +248,14 @@ local function WallCheck(startPos, endPos)
         if not result.Instance:IsDescendantOf(LocalPlayer.Character)
             and not (result.Instance.Name:find("Head") or result.Instance.Name:find("HumanoidRootPart"))
         then
-            return true -- เจอสิ่งกีดขวาง/กำแพง
+            return true
         end
     end
     return false
 end
 
 local function GetClosestTargetFOV()
-    -- ล็อกเป้าคน "ใกล้หัวเรา" ที่สุดใน FOV จริงๆ
+    -- ล็อกเป้าคนใกล้ "หัวเรา" ใน FOV จริงๆ (และมั่นใจที่สุด)
     local closest, shortest = nil, math.huge
     local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
     if not myHead then return nil end
@@ -266,7 +299,7 @@ oldFire = hookfunction(send.FireServer,function(self,...)
             local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
             local useHRP = false
             local part, aimPos
-            -- NO Attach toggle, only auto detect AntiAim (IsTargetAntiAim)
+            -- AttachAntiAim ไม่มี toggle! ใช้ auto detect เฉพาะเป้าหมาย
             if IsTargetAntiAim(target) then
                 useHRP = true
             end
@@ -287,9 +320,9 @@ oldFire = hookfunction(send.FireServer,function(self,...)
                     args[4] = CFrame.new(aimPos)
                     args[5] = {[1] = {[1] = {["Instance"]=part,["Position"]=aimPos}}}
                 end
-                -- เลเซอร์เฉพาะตอนยิงจริง!
+                -- เลเซอร์เฉพาะยิงจริง
                 FireLaserEffect(myHead.Position, part.Position, useHRP and Color3.fromRGB(200,200,50) or Color3.fromRGB(0,255,0), 0.17, 0.18)
-                -- Bullet effect
+                -- bullet effect
                 local dist = (aimPos-myHead.Position).Magnitude
                 local bullet = Instance.new("Part")
                 bullet.Anchored = true
@@ -299,7 +332,7 @@ oldFire = hookfunction(send.FireServer,function(self,...)
                 bullet.CFrame = CFrame.new(myHead.Position,aimPos)*CFrame.new(0,0,-dist/2)
                 bullet.Color = useHRP and Color3.fromRGB(200,200,50) or Color3.fromRGB(50,255,150)
                 bullet.Parent = workspace
-                Debris:AddItem(bullet,2.7)
+                Debris:AddItem(bullet,2.2)
             end
         end
     end
@@ -335,7 +368,7 @@ RunService.RenderStepped:Connect(function()
 end)
 
 -------------------------------------------------
--- ESP ของเดิม
+-- ESP ระบบบ็อกซ์/ชื่อ --------------------------
 -------------------------------------------------
 local boxESPEnabled = false
 local nameESPEnabled = false
