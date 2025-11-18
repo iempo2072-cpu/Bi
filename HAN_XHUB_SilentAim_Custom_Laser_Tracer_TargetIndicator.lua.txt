@@ -29,15 +29,51 @@ local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
 -------------------------------------------------
--- Silent Aim + FOV วงกลางจอ + เลเซอร์ + ล็อกคนใกล้สุด + เส้นบอกเป้า
+-- No Recoil (กันกล้องดีด)
+-------------------------------------------------
+local NoRecoilEnabled = false
+local function doNoRecoil()
+    while NoRecoilEnabled do
+        wait(0.25)
+        pcall(function()
+            for _, tool in pairs(LocalPlayer.Backpack:GetChildren()) do
+                if tool:IsA("Tool") then
+                    if tool:FindFirstChild("Recoil") then tool.Recoil.Value = 0 end
+                    if tool:GetAttribute("Recoil") then tool:SetAttribute("Recoil", 0) end
+                end
+            end
+            for _, tool in pairs(LocalPlayer.Character:GetChildren()) do
+                if tool:IsA("Tool") then
+                    if tool:FindFirstChild("Recoil") then tool.Recoil.Value = 0 end
+                    if tool:GetAttribute("Recoil") then tool:SetAttribute("Recoil", 0) end
+                end
+            end
+        end)
+    end
+end
+
+CombatTab:Toggle({
+    Title = "No Recoil (กันกล้องดีด)",
+    Default = false,
+    Callback = function(v)
+        NoRecoilEnabled = v
+        if v then
+            spawn(doNoRecoil)
+        end
+    end
+})
+
+-------------------------------------------------
+-- Silent Aim + FOV วงกลางจอ + เลเซอร์ + ล็อกคนใกล้สุด + เส้นบอกเป้า + BulletSpeed=1000
 -------------------------------------------------
 local SilentAimEnabled = false
 local showFov = false
+local BulletSpeed = 1000 -- ความเร็วกระสุน
 local FOVCircle = Drawing.new("Circle")
 FOVCircle.Radius = 125
 FOVCircle.Thickness = 2
 FOVCircle.Filled = false
-FOVCircle.Color = Color3.fromRGB(255, 255, 0)
+FOVCircle.Color = Color3.fromRGB(255,255,0)
 FOVCircle.Visible = false
 
 local TracerLine = Drawing.new("Line")
@@ -78,7 +114,7 @@ CombatTab:Slider({
     end
 })
 
--- หาเป้าที่อยู่ใกล้หัวเรา เป็นคนที่ "ล็อก" จริง
+-- เป้าที่ใกล้เราสุดใน FOV
 local function GetClosestTargetFOV()
     local closest, shortest = nil, math.huge
     local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
@@ -101,7 +137,6 @@ local function GetClosestTargetFOV()
     return closest
 end
 
--- สร้าง Laser ตอนยิง
 local function FireLaserEffect(fromPos, toPos, color, width, duration)
     local laser = Instance.new("Part")
     laser.Anchored = true
@@ -115,13 +150,12 @@ local function FireLaserEffect(fromPos, toPos, color, width, duration)
     Debris:AddItem(laser, duration or 0.2)
 end
 
--- ตัวอย่างใช้กับ Net.send, Remote, หรือระบบยิงปืนในเกม
-local Net = ReplicatedStorage:FindFirstChild("Net") -- แก้เป็น RemoteEvent จริงๆของคุณ
-local __Silent_Aim
-
-__Silent_Aim = hookfunction(Net.send,function(...)
+-- ยกตัวอย่าง hook Remote:Send, Net หรือ RemoteEvent ของเกม
+local send = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Send")
+local oldFire
+oldFire = hookfunction(send.FireServer,function(self,...)
     local args = {...}
-    if SilentAimEnabled and args[1] == "shoot_gun" then
+    if SilentAimEnabled then
         local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
         local target = GetClosestTargetFOV()
         if target and target.Character and myHead then
@@ -138,7 +172,7 @@ __Silent_Aim = hookfunction(Net.send,function(...)
                     end
                 end
 
-                -- สร้างเลเซอร์ทุกครั้งที่ยิง
+                -- เลเซอร์ตอนยิงจริง
                 local dist = (TargetPosition - Origin).Magnitude
                 if dist > 0.1 then
                     FireLaserEffect(Origin, TargetPosition, Color3.fromRGB(255,50,150), 0.08, 0.2)
@@ -146,12 +180,11 @@ __Silent_Aim = hookfunction(Net.send,function(...)
             end
         end
     end
-    return __Silent_Aim(table.unpack(args))
+    return oldFire(self,unpack(args))
 end)
 
--- RenderStepped วาด FOV + เส้น target + tracer ทุกเฟรม
+-- RenderStepped FOV, เส้น target, tracer
 RunService.RenderStepped:Connect(function()
-    -- FOV วงเหลืองกลางจอเสมอ (ไม่หลุดจอ ไม่เลื่อน)
     FOVCircle.Position = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
     local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
     local target = GetClosestTargetFOV()
@@ -164,12 +197,10 @@ RunService.RenderStepped:Connect(function()
         local my2D = Vector2.new(Camera:WorldToViewportPoint(myHead.Position).X,Camera:WorldToViewportPoint(myHead.Position).Y)
         local distFromCenter = (t2D - centerFOV).Magnitude
 
-        -- เส้น tracer หัวเรา->หัวเป้า
         TracerLine.From = my2D
         TracerLine.To = t2D
         TracerLine.Visible = distFromCenter <= FOVCircle.Radius
 
-        -- เส้น TargetLine (แดง) กลาง FOV->หัวเป้าปัจจุบัน
         TargetLine.From = centerFOV
         TargetLine.To = t2D
         TargetLine.Visible = distFromCenter <= FOVCircle.Radius
@@ -180,7 +211,7 @@ RunService.RenderStepped:Connect(function()
 end)
 
 -------------------------------------------------
--- ESP Box/Name แบบครบ (แก้ loop, โหลด character ถูก!)
+-- ESP Box/Name (ครบมือถือ/PlayerAdded/Removed)
 -------------------------------------------------
 local boxESPEnabled = false
 local nameESPEnabled = false
@@ -288,4 +319,5 @@ local function loadESP()
         end
     end)
 end
+
 loadESP()
