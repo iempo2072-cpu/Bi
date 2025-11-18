@@ -1,4 +1,4 @@
--- WindUI config/boot --
+-- WindUI Boot --
 local WindUI
 do
     local ok, result = pcall(function()
@@ -15,42 +15,30 @@ local Window = WindUI:CreateWindow({
     Title = "HAN XHUB",
     Author = "HAN XHUB",
     Folder = "ftgshub",
-    Icon = "computer",
-    NewElements = true,
-    HideSearchBar = false,
-    OpenButton = {
-        Title = "HAN XHUB",
-        CornerRadius = UDim.new(1,0),
-        StrokeThickness = 3,
-        Enabled = true,
-        Draggable = true,
-        OnlyMobile = false,
-        Color = ColorSequence.new(Color3.fromHex("#30FF6A"), Color3.fromHex("#e7ff2f"))
-    }
+    Icon = "computer"
 })
 
 local CombatTab = Window:Tab({Title = "Combat", Icon = "sword"})
 local ESPTab = Window:Tab({Title = "ESP", Icon = "eye"})
+
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
 -------------------------------------------------
--- Silent Aim (ล็อกคนใกล้สุด, Laser, เส้นบอกเป้ากลาง FOV)
+-- Silent Aim + FOV วงกลางจอ + เลเซอร์ + ล็อกคนใกล้สุด + เส้นบอกเป้า
 -------------------------------------------------
 local SilentAimEnabled = false
-local BASE_PREDICTION = 0.14
+local showFov = false
 local FOVCircle = Drawing.new("Circle")
-FOVCircle.Radius = 120
+FOVCircle.Radius = 125
 FOVCircle.Thickness = 2
 FOVCircle.Filled = false
-FOVCircle.Color = Color3.fromRGB(255,255,0)
+FOVCircle.Color = Color3.fromRGB(255, 255, 0)
 FOVCircle.Visible = false
-local showFov = false
 
 local TracerLine = Drawing.new("Line")
 TracerLine.Color = Color3.fromRGB(0,255,255)
@@ -63,7 +51,7 @@ TargetLine.Thickness = 3
 TargetLine.Visible = false
 
 CombatTab:Toggle({
-    Title = "Enable Silent Aim (Auto Detect)",
+    Title = "Enable Silent Aim",
     Default = false,
     Callback = function(v)
         SilentAimEnabled = v
@@ -84,22 +72,23 @@ CombatTab:Toggle({
 CombatTab:Slider({
     Title = "FOV Radius",
     Step = 1,
-    Value = {Min = 50, Max = 500, Default = FOVCircle.Radius},
+    Value = {Min = 50, Max = 400, Default = FOVCircle.Radius},
     Callback = function(v)
         FOVCircle.Radius = tonumber(v)
     end
 })
 
--- ฟังก์ชันหาเป้าหมายใน FOV ใกล้สุด
+-- หาเป้าที่อยู่ใกล้หัวเรา เป็นคนที่ "ล็อก" จริง
 local function GetClosestTargetFOV()
     local closest, shortest = nil, math.huge
     local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
     if not myHead then return nil end
+
     for _,plr in pairs(Players:GetPlayers()) do
         if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("Head") then
             local head = plr.Character.Head
             local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
-            local distFov = (Vector2.new(screenPos.X,screenPos.Y) - Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)).Magnitude
+            local distFov = (Vector2.new(screenPos.X,screenPos.Y) - Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)).Magnitude
             local distWorld = (head.Position - myHead.Position).Magnitude
             if onScreen and distFov <= FOVCircle.Radius then
                 if distWorld < shortest then
@@ -112,7 +101,7 @@ local function GetClosestTargetFOV()
     return closest
 end
 
--- ฟังก์ชัน Laser Effect ตอนยิง
+-- สร้าง Laser ตอนยิง
 local function FireLaserEffect(fromPos, toPos, color, width, duration)
     local laser = Instance.new("Part")
     laser.Anchored = true
@@ -123,114 +112,64 @@ local function FireLaserEffect(fromPos, toPos, color, width, duration)
     laser.Size = Vector3.new(width or 0.16, width or 0.16, dist)
     laser.CFrame = CFrame.new(fromPos, toPos) * CFrame.new(0, 0, -dist/2)
     laser.Parent = workspace
-    Debris:AddItem(laser, duration or 0.22)
+    Debris:AddItem(laser, duration or 0.2)
 end
 
--- ฟังก์ชันยิง Silent Aim
-local BulletSpeed = 1000
+-- ตัวอย่างใช้กับ Net.send, Remote, หรือระบบยิงปืนในเกม
+local Net = ReplicatedStorage:FindFirstChild("Net") -- แก้เป็น RemoteEvent จริงๆของคุณ
 local __Silent_Aim
-local TargetHistory = {}
-local Net = ReplicatedStorage:FindFirstChild("Net") -- อาจต้องปรับเป็น Remote จริงของคุณ
-local Char = _G.Char or {}                           -- อาจต้องผูกจริงของคุณ
-local c = _G.c or function() return {} end           -- อาจต้องผูกจริงของคุณ
-local Debris = game:GetService("Debris")
 
 __Silent_Aim = hookfunction(Net.send,function(...)
     local args = {...}
-    if SilentAimEnabled and args[1] == "shoot_gun" and c().AimAssaint then
+    if SilentAimEnabled and args[1] == "shoot_gun" then
         local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-        local closest = GetClosestTargetFOV()
-        if closest and closest.Character and myHead then
-            local Real = c().TargetSlientAim or {Name = closest.Name}
-            for _, target in pairs({closest.Character}) do
-                local TargetPart =
-                    target:FindFirstChild(tostring(c().PartSelect)) or
-                    target:FindFirstChild("Head") or
-                    target:FindFirstChild("HumanoidRootPart")
-                if TargetPart then
-                    local Origin = myHead.Position
-                    local TargetPosition = TargetPart.Position
-                    local CurrentTime = tick()
-                    local r = TargetPosition - Origin
-                    local TravelHee = r.Magnitude / BulletSpeed
+        local target = GetClosestTargetFOV()
+        if target and target.Character and myHead then
+            local TargetPart = target.Character:FindFirstChild("Head") or target.Character:FindFirstChild("HumanoidRootPart")
+            if TargetPart then
+                local Origin = myHead.Position
+                local TargetPosition = TargetPart.Position
 
-                    TargetHistory[target] = TargetHistory[target] or {}
-                    table.insert(TargetHistory[target], {pos = TargetPosition, time = CurrentTime})
-
-                    local hist = TargetHistory[target]
-                    local oldest = hist and hist[#hist - 1]
-
-                    local approxVel = Vector3.new(0,0,0)
-                    if oldest then
-                        local dt = CurrentTime - oldest.time
-                        if dt > 0 then
-                            approxVel = (TargetPosition - oldest.pos) / dt
-                        end
+                args[3] = CFrame.new(Origin, TargetPosition)
+                for _, v in pairs(args[4]) do
+                    for _, x in pairs(v) do
+                        x.Position = TargetPosition
+                        x.Instance = TargetPart
                     end
-                    
-                    local v = approxVel.Magnitude
-                    local d = r.Magnitude
-                    local p = 0.05 -- ping, ปรับเองหรือดึงจริง
-                    local g = workspace.Gravity
-                    local PussyWhite = (v * p) / BulletSpeed
-                    local Rapter = math.clamp(d / BulletSpeed, 0.15, 0.269)
-                    local LeeKung = PussyWhite + Rapter
-                    local direction = r.Unit
-                    local IncepPosition = TargetPosition
-                        + approxVel * p
-                        + direction * (TravelHee * LeeKung)
-                        + Vector3.new(0, -0.01 * workspace.Gravity * (TravelHee ^ 2), 0)
+                end
 
-                    args[3] = CFrame.new(Origin, IncepPosition)
-                    for _, v in pairs(args[4]) do
-                        for _, x in pairs(v) do
-                            x.Normal = Vector3.new(0,1,0)
-                            x.Position = IncepPosition
-                            x.Instance = TargetPart
-                        end
-                    end
-
-                    pcall(
-                        function()
-                            local dist = (IncepPosition - Origin).Magnitude
-                            if dist > 0.1 then
-                                FireLaserEffect(Origin, IncepPosition, Color3.fromRGB(255,50,150), 0.05, 0.3)
-                                local tracer = Instance.new("Part")
-                                tracer.Size = Vector3.new(0.03, 0.03, dist)
-                                tracer.CFrame = CFrame.new(Origin, IncepPosition) * CFrame.new(0, 0, -dist / 2)
-                                tracer.Material = Enum.Material.Neon
-                                tracer.CanCollide = false
-                                tracer.Anchored = true
-                                tracer.Parent = workspace
-                                Debris:AddItem(tracer, 1)
-                            end
-                        end
-                    )
+                -- สร้างเลเซอร์ทุกครั้งที่ยิง
+                local dist = (TargetPosition - Origin).Magnitude
+                if dist > 0.1 then
+                    FireLaserEffect(Origin, TargetPosition, Color3.fromRGB(255,50,150), 0.08, 0.2)
                 end
             end
         end
     end
-
     return __Silent_Aim(table.unpack(args))
 end)
 
--- เส้นบอกเป้ายิงตรงกลางวง FOV
+-- RenderStepped วาด FOV + เส้น target + tracer ทุกเฟรม
 RunService.RenderStepped:Connect(function()
-    FOVCircle.Position = Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)
+    -- FOV วงเหลืองกลางจอเสมอ (ไม่หลุดจอ ไม่เลื่อน)
+    FOVCircle.Position = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
     local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
     local target = GetClosestTargetFOV()
     local part = target and target.Character and target.Character:FindFirstChild("Head")
     local centerFOV = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+
     if SilentAimEnabled and myHead and target and part then
-        local targetScreenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+        local targetScreenPos = Camera:WorldToViewportPoint(part.Position)
         local t2D = Vector2.new(targetScreenPos.X, targetScreenPos.Y)
-        local my2D = Vector2.new(Camera:WorldToViewportPoint(myHead.Position).X, Camera:WorldToViewportPoint(myHead.Position).Y)
+        local my2D = Vector2.new(Camera:WorldToViewportPoint(myHead.Position).X,Camera:WorldToViewportPoint(myHead.Position).Y)
         local distFromCenter = (t2D - centerFOV).Magnitude
-        -- เส้น TracerLine: หัวเรา->เป้า
+
+        -- เส้น tracer หัวเรา->หัวเป้า
         TracerLine.From = my2D
         TracerLine.To = t2D
         TracerLine.Visible = distFromCenter <= FOVCircle.Radius
-        -- เส้น TargetLine: ระหว่างกลางจอ FOV->เป้าหมาย
+
+        -- เส้น TargetLine (แดง) กลาง FOV->หัวเป้าปัจจุบัน
         TargetLine.From = centerFOV
         TargetLine.To = t2D
         TargetLine.Visible = distFromCenter <= FOVCircle.Radius
@@ -241,7 +180,7 @@ RunService.RenderStepped:Connect(function()
 end)
 
 -------------------------------------------------
--- ESP ระบบบ็อกซ์/ชื่อ (ตามปกติ) ----------------
+-- ESP Box/Name แบบครบ (แก้ loop, โหลด character ถูก!)
 -------------------------------------------------
 local boxESPEnabled = false
 local nameESPEnabled = false
@@ -249,7 +188,7 @@ local espPlayers = {}
 
 ESPTab:Toggle({
     Title = "Box ESP",
-    Default = false,
+    Default = true,
     Callback = function(state)
         boxESPEnabled = state
     end
@@ -257,7 +196,7 @@ ESPTab:Toggle({
 
 ESPTab:Toggle({
     Title = "Name ESP",
-    Default = false,
+    Default = true,
     Callback = function(state)
         nameESPEnabled = state
     end
@@ -265,19 +204,18 @@ ESPTab:Toggle({
 
 local function createESP(player)
     local lines = {
-        top = Drawing.new("Line"),
-        bottom = Drawing.new("Line"),
-        left = Drawing.new("Line"),
-        right = Drawing.new("Line"),
+        top = Drawing.new("Line"), bottom = Drawing.new("Line"),
+        left = Drawing.new("Line"), right = Drawing.new("Line"),
     }
     local nameText = Drawing.new("Text")
     nameText.Size = 16
     nameText.Center = true
     nameText.Outline = true
-    nameText.Color = Color3.fromRGB(255, 0, 0)
+    nameText.Color = Color3.fromRGB(255,0,0)
     nameText.Visible = false
+
     for _, line in pairs(lines) do
-        line.Color = Color3.new(1, 1, 1)
+        line.Color = Color3.new(1,1,1)
         line.Thickness = 1
         line.Visible = false
     end
@@ -288,10 +226,9 @@ local function createESP(player)
             nameText.Visible = false
             return
         end
-        local head = player.Character.Head
-        local hrp = player.Character.HumanoidRootPart
-        local topWorld = head.Position + Vector3.new(0, 1, 0)
-        local bottomWorld = hrp.Position - Vector3.new(0, 3.5, 0)
+        local head, hrp = player.Character.Head, player.Character.HumanoidRootPart
+        local topWorld = head.Position + Vector3.new(0,1,0)
+        local bottomWorld = hrp.Position - Vector3.new(0,3.5,0)
         local top, onTop = Camera:WorldToViewportPoint(topWorld)
         local bottom, onBottom = Camera:WorldToViewportPoint(bottomWorld)
         if onTop and onBottom and top.Z > 0 and bottom.Z > 0 then
@@ -304,14 +241,10 @@ local function createESP(player)
             local bl = Vector2.new(x, y + height)
             local br = Vector2.new(x + width, y + height)
             if boxESPEnabled then
-                lines.top.From = tl
-                lines.top.To = tr
-                lines.bottom.From = bl
-                lines.bottom.To = br
-                lines.left.From = tl
-                lines.left.To = bl
-                lines.right.From = tr
-                lines.right.To = br
+                lines.top.From = tl; lines.top.To = tr
+                lines.bottom.From = bl; lines.bottom.To = br
+                lines.left.From = tl; lines.left.To = bl
+                lines.right.From = tr; lines.right.To = br
                 for _, line in pairs(lines) do line.Visible = true end
             else
                 for _, line in pairs(lines) do line.Visible = false end
@@ -355,5 +288,4 @@ local function loadESP()
         end
     end)
 end
-
 loadESP()
