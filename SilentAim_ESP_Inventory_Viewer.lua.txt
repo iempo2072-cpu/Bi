@@ -75,11 +75,11 @@ CombatTab:Toggle({
 })
 
 -------------------------------------------------
--- Silent Aim + สลับ Head/HRP ด้วย AttachAntiAim ---
+-- Silent Aim + AttachAntiAim + WallCheck + Tracer Line
 -------------------------------------------------
 local SilentAimEnabled = false
 local AttachAntiAim = false
-local BASE_PREDICTION = 0.14
+local BASE_PREDICTION = 0.15
 local FOVCircle = Drawing.new("Circle")
 FOVCircle.Radius = 120
 FOVCircle.Thickness = 2
@@ -128,7 +128,6 @@ CombatTab:Toggle({
     end
 })
 
--- ========== SilentAim ฟังก์ชันทั้ง 2 โหมด ==========
 local velocity = Vector3.new(0,0,0)
 local lastTargetId = nil
 local lastHeadPos = nil
@@ -198,41 +197,88 @@ local function GetClosestTargetHead()
     return closest
 end
 
+-- เช็คกำแพงระหว่างเราและเป้ายิง (true=wall, false=no wall)
+local function IsWallBetween(fromPos, toPos)
+    local dir = (toPos - fromPos).Unit
+    local dist = (toPos - fromPos).Magnitude
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+    local result = workspace:Raycast(fromPos, dir * dist, rayParams)
+    if result and result.Instance then
+        if not result.Instance:IsDescendantOf(LocalPlayer.Character) and not result.Instance.Name:find("Head") and not result.Instance.Name:find("HumanoidRootPart") then
+            return true
+        end
+    end
+    return false
+end
+
 local send = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Send")
 local oldFire
 oldFire = hookfunction(send.FireServer,function(self,...)
     local args = {...}
     if SilentAimEnabled then
+        local targetPart, aimPos, targetPos
         if AttachAntiAim then
-            -- ยิง HRP ทะลุ anti aim
             local target = GetClosestTargetHRP()
-            if target and target.Character then
-                local hrp = target.Character:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    local aimPos = PredictPositionHRP(hrp, BASE_PREDICTION)
-                    args[4] = CFrame.new(math.huge,math.huge,math.huge)
-                    args[5] = {[1] = {[1] = {["Instance"]=hrp, ["Position"]=aimPos}}}
-                end
-            end
+            targetPart = target and target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+            aimPos = targetPart and PredictPositionHRP(targetPart, BASE_PREDICTION) or nil
         else
-            -- ยิง Head แบบเดิม
             local target = GetClosestTargetHead()
-            if target and target.Character then
-                local head = target.Character:FindFirstChild("Head")
-                if head then
-                    local vel = UpdateTargetVelocity(target)
-                    local aimPos = PredictPositionHead(head, vel, BASE_PREDICTION)
-                    args[4] = CFrame.new(math.huge,math.huge,math.huge,0,0,0,0,0,0,0,0,0)
-                    args[5] = {[1] = {[1] = {["Instance"]=head, ["Position"]=aimPos}}}
-                end
+            targetPart = target and target.Character and target.Character:FindFirstChild("Head")
+            local vel = UpdateTargetVelocity(target)
+            aimPos = targetPart and PredictPositionHead(targetPart, vel, BASE_PREDICTION) or nil
+        end
+        targetPos = aimPos
+        local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+        if targetPart and aimPos and myHead then
+            local isWall = IsWallBetween(myHead.Position, aimPos)
+            if isWall then
+                -- ยิงทะลุ (wallbang)
+                args[4] = CFrame.new(math.huge,math.huge,math.huge)
+                args[5] = {[1] = {[1] = {["Instance"]=targetPart, ["Position"]=aimPos, ["Normal"]=Vector3.new(0,1,0)}}}
+                args[6] = true -- ถ้า Remote มี flag CanWallbang
+            else
+                -- ยิงปกติ
+                args[4] = CFrame.new(aimPos)
+                args[5] = {[1] = {[1] = {["Instance"]=targetPart, ["Position"]=aimPos, ["Normal"]=Vector3.new(0,1,0)}}}
+                args[6] = false
             end
         end
     end
-    return oldFire(self,unpack(args))
+    return oldFire(self, unpack(args))
 end)
 
+-- TracerLine (แสดงเส้นกำลังล็อกเป้าใน FOV)
 RunService.RenderStepped:Connect(function()
     FOVCircle.Position = Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)
+    local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+    local target, targetPart
+    if SilentAimEnabled then
+        if AttachAntiAim then
+            target = GetClosestTargetHRP()
+            targetPart = target and target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+        else
+            target = GetClosestTargetHead()
+            targetPart = target and target.Character and target.Character:FindFirstChild("Head")
+        end
+        if myHead and targetPart then
+            local my2D = Vector2.new(Camera:WorldToViewportPoint(myHead.Position).X, Camera:WorldToViewportPoint(myHead.Position).Y)
+            local tar2D = Vector2.new(Camera:WorldToViewportPoint(targetPart.Position).X, Camera:WorldToViewportPoint(targetPart.Position).Y)
+            local distFromCenter = (tar2D - Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)).Magnitude
+            if not showFov or distFromCenter <= FOVCircle.Radius then
+                TracerLine.From = my2D
+                TracerLine.To = tar2D
+                TracerLine.Visible = true
+            else
+                TracerLine.Visible = false
+            end
+        else
+            TracerLine.Visible = false
+        end
+    else
+        TracerLine.Visible = false
+    end
 end)
 
 -------------------------------------------------
