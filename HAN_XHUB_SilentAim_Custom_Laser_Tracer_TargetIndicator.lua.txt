@@ -64,7 +64,7 @@ CombatTab:Toggle({
 })
 
 -------------------------------------------------
--- Silent Aim + FOV วงกลางจอ + เลเซอร์ + ล็อกคนใกล้สุด + เส้นบอกเป้า + BulletSpeed=1000
+-- Silent Aim + FOV วงกลางจอ + เลเซอร์ + ล็อกคนใกล้สุด (ไม่มีเส้นจากหัวตัวเอง)
 -------------------------------------------------
 local SilentAimEnabled = false
 local showFov = false
@@ -76,11 +76,6 @@ FOVCircle.Filled = false
 FOVCircle.Color = Color3.fromRGB(255,255,0)
 FOVCircle.Visible = false
 
-local TracerLine = Drawing.new("Line")
-TracerLine.Color = Color3.fromRGB(0,255,255)
-TracerLine.Thickness = 2
-TracerLine.Visible = false
-
 local TargetLine = Drawing.new("Line")
 TargetLine.Color = Color3.fromRGB(255,50,50)
 TargetLine.Thickness = 3
@@ -91,7 +86,6 @@ CombatTab:Toggle({
     Default = false,
     Callback = function(v)
         SilentAimEnabled = v
-        TracerLine.Visible = v and TracerLine.Visible
         TargetLine.Visible = v and TargetLine.Visible
     end
 })
@@ -150,7 +144,7 @@ local function FireLaserEffect(fromPos, toPos, color, width, duration)
     Debris:AddItem(laser, duration or 0.2)
 end
 
--- ยกตัวอย่าง hook Remote:Send, Net หรือ RemoteEvent ของเกม
+-- hook Remote:Send, Net หรือ RemoteEvent
 local send = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Send")
 local oldFire
 oldFire = hookfunction(send.FireServer,function(self,...)
@@ -183,29 +177,21 @@ oldFire = hookfunction(send.FireServer,function(self,...)
     return oldFire(self,unpack(args))
 end)
 
--- RenderStepped FOV, เส้น target, tracer
+-- RenderStepped FOV + TargetLine (ไม่วาดเส้นหัวตัวเอง)
 RunService.RenderStepped:Connect(function()
     FOVCircle.Position = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
-    local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
     local target = GetClosestTargetFOV()
     local part = target and target.Character and target.Character:FindFirstChild("Head")
     local centerFOV = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
-
-    if SilentAimEnabled and myHead and target and part then
+    if SilentAimEnabled and target and part then
         local targetScreenPos = Camera:WorldToViewportPoint(part.Position)
         local t2D = Vector2.new(targetScreenPos.X, targetScreenPos.Y)
-        local my2D = Vector2.new(Camera:WorldToViewportPoint(myHead.Position).X,Camera:WorldToViewportPoint(myHead.Position).Y)
         local distFromCenter = (t2D - centerFOV).Magnitude
-
-        TracerLine.From = my2D
-        TracerLine.To = t2D
-        TracerLine.Visible = distFromCenter <= FOVCircle.Radius
 
         TargetLine.From = centerFOV
         TargetLine.To = t2D
         TargetLine.Visible = distFromCenter <= FOVCircle.Radius
     else
-        TracerLine.Visible = false
         TargetLine.Visible = false
     end
 end)
