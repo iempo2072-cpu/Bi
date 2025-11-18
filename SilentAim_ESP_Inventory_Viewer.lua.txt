@@ -31,6 +31,7 @@ local Window = WindUI:CreateWindow({
 
 local CombatTab = Window:Tab({Title = "Combat", Icon = "sword"})
 local ESPTab = Window:Tab({Title = "ESP", Icon = "eye"})
+local CrateTab = Window:Tab({Title = "ข้ามสุ่มกล่อง", Icon = "package"})
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -75,7 +76,7 @@ CombatTab:Toggle({
 })
 
 -------------------------------------------------
--- Silent Aim + Velocity & FOV ---------
+-- Silent Aim + Velocity & FOV คม+จริง ---------
 -------------------------------------------------
 local SilentAimEnabled = false
 local BASE_PREDICTION = 0.14
@@ -119,14 +120,14 @@ CombatTab:Slider({
     end
 })
 
--- จับ Velocity ด้วยเวลา frame
+-- ------ Velocity Calculations -------------
 local velocity = Vector3.new(0,0,0)
-local velocityRecord = {}
 local lastTargetId = nil
 local lastHeadPos = nil
 local lastHeadTime = nil
 
 local function UpdateTargetVelocity(target)
+    -- จับเวลาและคำนวณ velocity
     if not (target and target.Character and target.Character:FindFirstChild("Head")) then return Vector3.new(0,0,0) end
     local head = target.Character.Head
     local now = tick()
@@ -153,6 +154,7 @@ local function PredictPositionUsingVelocity(head, predictionTime, vel)
 end
 
 local function GetClosestTargetFOV()
+    -- หาคนที่ใกล้ FOV ตรงกลางจอสุด
     local closest
     local shortest = math.huge
     local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
@@ -178,34 +180,31 @@ oldFire = hookfunction(send.FireServer,function(self,...)
         local target = GetClosestTargetFOV()
         if target and target.Character then
             local head = target.Character:FindFirstChild("Head")
+            -- อัปเดต velocity ตรงจุดยิง
             if head then
-                -- อัปเดต velocity ขณะยิง
                 local vel = UpdateTargetVelocity(target)
                 local aimPos = PredictPositionUsingVelocity(head, BASE_PREDICTION, vel)
                 args[4] = CFrame.new(math.huge,math.huge,math.huge,0,0,0,0,0,0,0,0,0)
                 args[5] = {[1]={[1]={["Instance"]=head,["Position"]=aimPos}}}
                 local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
                 if myHead then
-                    SpawnDebugBullet(myHead.Position,aimPos)
+                    -- Optional Bullet Debug
+                    local dist = (aimPos-myHead.Position).Magnitude
+                    local bullet = Instance.new("Part")
+                    bullet.Anchored = true
+                    bullet.CanCollide = false
+                    bullet.Material = Enum.Material.Neon
+                    bullet.Size = Vector3.new(0.1,0.1,dist)
+                    bullet.CFrame = CFrame.new(myHead.Position,aimPos)*CFrame.new(0,0,-dist/2)
+                    bullet.Color = Color3.fromRGB(50,255,150)
+                    bullet.Parent = workspace
+                    Debris:AddItem(bullet,3)
                 end
             end
         end
     end
     return oldFire(self,unpack(args))
 end)
-
-local function SpawnDebugBullet(startPos,targetPos)
-    local dist = (targetPos-startPos).Magnitude
-    local part = Instance.new("Part")
-    part.Anchored = true
-    part.CanCollide = false
-    part.Material = Enum.Material.Neon
-    part.Size = Vector3.new(0.1,0.1,dist)
-    part.CFrame = CFrame.new(startPos,targetPos)*CFrame.new(0,0,-dist/2)
-    part.Color = Color3.fromRGB(255,50,150)
-    part.Parent = workspace
-    Debris:AddItem(part,5)
-end
 
 RunService.RenderStepped:Connect(function()
     FOVCircle.Position = Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)
@@ -233,6 +232,44 @@ RunService.RenderStepped:Connect(function()
         TracerLine.Visible = false
     end
 end)
+
+-------------------------------------------------
+-- ข้ามการสุ่มกล่อง/รับไอเทมที่ต้องการ ---------
+-------------------------------------------------
+local wantedItem = "LegendaryRifle" -- ชื่อไอเทมที่ต้องการได้
+local boxType = "rifle"
+
+CrateTab:TextBox({
+    Title = "ชื่อไอเทม (ตรงกับระบบเกม)",
+    Placeholder = "เช่น LegendaryRifle",
+    Callback = function(val)
+        wantedItem = val
+    end
+})
+
+CrateTab:Dropdown({
+    Title = "ประเภทกล่อง",
+    Options = {"pistol", "rifle", "sniper"},
+    Default = "rifle",
+    Callback = function(val)
+        boxType = val
+    end
+})
+
+CrateTab:Button({
+    Title = "ข้ามสุ่ม! รับไอเทมนี้ทันที",
+    Callback = function()
+        local RemoteBox = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("OpenBox")
+        if RemoteBox then
+            RemoteBox:FireServer("open", {
+                ["BoxType"] = boxType,
+                ["ChosenItem"] = wantedItem
+            })
+        else
+            warn("ไม่พบ Remote OpenBox ในเกมนี้!")
+        end
+    end
+})
 
 -------------------------------------------------
 -- ESP ระบบบ็อกซ์/ชื่อ --------------------------
