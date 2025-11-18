@@ -1,0 +1,359 @@
+-- WindUI config/boot --
+local WindUI
+do
+    local ok, result = pcall(function()
+        return require("./src/Init")
+    end)
+    if ok then
+        WindUI = result
+    else
+        WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/refs/heads/main/dist/main.lua"))()
+    end
+end
+
+local Window = WindUI:CreateWindow({
+    Title = "HAN XHUB",
+    Author = "HAN XHUB",
+    Folder = "ftgshub",
+    Icon = "computer",
+    NewElements = true,
+    HideSearchBar = false,
+    OpenButton = {
+        Title = "HAN XHUB",
+        CornerRadius = UDim.new(1,0),
+        StrokeThickness = 3,
+        Enabled = true,
+        Draggable = true,
+        OnlyMobile = false,
+        Color = ColorSequence.new(Color3.fromHex("#30FF6A"), Color3.fromHex("#e7ff2f"))
+    }
+})
+
+local CombatTab = Window:Tab({Title = "Combat", Icon = "sword"})
+local ESPTab = Window:Tab({Title = "ESP", Icon = "eye"})
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Debris = game:GetService("Debris")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-------------------------------------------------
+-- Silent Aim (ล็อกคนใกล้สุด, Laser, เส้นบอกเป้ากลาง FOV)
+-------------------------------------------------
+local SilentAimEnabled = false
+local BASE_PREDICTION = 0.14
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Radius = 120
+FOVCircle.Thickness = 2
+FOVCircle.Filled = false
+FOVCircle.Color = Color3.fromRGB(255,255,0)
+FOVCircle.Visible = false
+local showFov = false
+
+local TracerLine = Drawing.new("Line")
+TracerLine.Color = Color3.fromRGB(0,255,255)
+TracerLine.Thickness = 2
+TracerLine.Visible = false
+
+local TargetLine = Drawing.new("Line")
+TargetLine.Color = Color3.fromRGB(255,50,50)
+TargetLine.Thickness = 3
+TargetLine.Visible = false
+
+CombatTab:Toggle({
+    Title = "Enable Silent Aim (Auto Detect)",
+    Default = false,
+    Callback = function(v)
+        SilentAimEnabled = v
+        TracerLine.Visible = v and TracerLine.Visible
+        TargetLine.Visible = v and TargetLine.Visible
+    end
+})
+
+CombatTab:Toggle({
+    Title = "Show FOV Circle",
+    Default = false,
+    Callback = function(v)
+        showFov = v
+        FOVCircle.Visible = v
+    end
+})
+
+CombatTab:Slider({
+    Title = "FOV Radius",
+    Step = 1,
+    Value = {Min = 50, Max = 500, Default = FOVCircle.Radius},
+    Callback = function(v)
+        FOVCircle.Radius = tonumber(v)
+    end
+})
+
+-- ฟังก์ชันหาเป้าหมายใน FOV ใกล้สุด
+local function GetClosestTargetFOV()
+    local closest, shortest = nil, math.huge
+    local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+    if not myHead then return nil end
+    for _,plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("Head") then
+            local head = plr.Character.Head
+            local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+            local distFov = (Vector2.new(screenPos.X,screenPos.Y) - Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)).Magnitude
+            local distWorld = (head.Position - myHead.Position).Magnitude
+            if onScreen and distFov <= FOVCircle.Radius then
+                if distWorld < shortest then
+                    shortest = distWorld
+                    closest = plr
+                end
+            end
+        end
+    end
+    return closest
+end
+
+-- ฟังก์ชัน Laser Effect ตอนยิง
+local function FireLaserEffect(fromPos, toPos, color, width, duration)
+    local laser = Instance.new("Part")
+    laser.Anchored = true
+    laser.CanCollide = false
+    laser.Material = Enum.Material.Neon
+    laser.Color = color or Color3.fromRGB(0,255,0)
+    local dist = (toPos-fromPos).Magnitude
+    laser.Size = Vector3.new(width or 0.16, width or 0.16, dist)
+    laser.CFrame = CFrame.new(fromPos, toPos) * CFrame.new(0, 0, -dist/2)
+    laser.Parent = workspace
+    Debris:AddItem(laser, duration or 0.22)
+end
+
+-- ฟังก์ชันยิง Silent Aim
+local BulletSpeed = 1000
+local __Silent_Aim
+local TargetHistory = {}
+local Net = ReplicatedStorage:FindFirstChild("Net") -- อาจต้องปรับเป็น Remote จริงของคุณ
+local Char = _G.Char or {}                           -- อาจต้องผูกจริงของคุณ
+local c = _G.c or function() return {} end           -- อาจต้องผูกจริงของคุณ
+local Debris = game:GetService("Debris")
+
+__Silent_Aim = hookfunction(Net.send,function(...)
+    local args = {...}
+    if SilentAimEnabled and args[1] == "shoot_gun" and c().AimAssaint then
+        local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+        local closest = GetClosestTargetFOV()
+        if closest and closest.Character and myHead then
+            local Real = c().TargetSlientAim or {Name = closest.Name}
+            for _, target in pairs({closest.Character}) do
+                local TargetPart =
+                    target:FindFirstChild(tostring(c().PartSelect)) or
+                    target:FindFirstChild("Head") or
+                    target:FindFirstChild("HumanoidRootPart")
+                if TargetPart then
+                    local Origin = myHead.Position
+                    local TargetPosition = TargetPart.Position
+                    local CurrentTime = tick()
+                    local r = TargetPosition - Origin
+                    local TravelHee = r.Magnitude / BulletSpeed
+
+                    TargetHistory[target] = TargetHistory[target] or {}
+                    table.insert(TargetHistory[target], {pos = TargetPosition, time = CurrentTime})
+
+                    local hist = TargetHistory[target]
+                    local oldest = hist and hist[#hist - 1]
+
+                    local approxVel = Vector3.new(0,0,0)
+                    if oldest then
+                        local dt = CurrentTime - oldest.time
+                        if dt > 0 then
+                            approxVel = (TargetPosition - oldest.pos) / dt
+                        end
+                    end
+                    
+                    local v = approxVel.Magnitude
+                    local d = r.Magnitude
+                    local p = 0.05 -- ping, ปรับเองหรือดึงจริง
+                    local g = workspace.Gravity
+                    local PussyWhite = (v * p) / BulletSpeed
+                    local Rapter = math.clamp(d / BulletSpeed, 0.15, 0.269)
+                    local LeeKung = PussyWhite + Rapter
+                    local direction = r.Unit
+                    local IncepPosition = TargetPosition
+                        + approxVel * p
+                        + direction * (TravelHee * LeeKung)
+                        + Vector3.new(0, -0.01 * workspace.Gravity * (TravelHee ^ 2), 0)
+
+                    args[3] = CFrame.new(Origin, IncepPosition)
+                    for _, v in pairs(args[4]) do
+                        for _, x in pairs(v) do
+                            x.Normal = Vector3.new(0,1,0)
+                            x.Position = IncepPosition
+                            x.Instance = TargetPart
+                        end
+                    end
+
+                    pcall(
+                        function()
+                            local dist = (IncepPosition - Origin).Magnitude
+                            if dist > 0.1 then
+                                FireLaserEffect(Origin, IncepPosition, Color3.fromRGB(255,50,150), 0.05, 0.3)
+                                local tracer = Instance.new("Part")
+                                tracer.Size = Vector3.new(0.03, 0.03, dist)
+                                tracer.CFrame = CFrame.new(Origin, IncepPosition) * CFrame.new(0, 0, -dist / 2)
+                                tracer.Material = Enum.Material.Neon
+                                tracer.CanCollide = false
+                                tracer.Anchored = true
+                                tracer.Parent = workspace
+                                Debris:AddItem(tracer, 1)
+                            end
+                        end
+                    )
+                end
+            end
+        end
+    end
+
+    return __Silent_Aim(table.unpack(args))
+end)
+
+-- เส้นบอกเป้ายิงตรงกลางวง FOV
+RunService.RenderStepped:Connect(function()
+    FOVCircle.Position = Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)
+    local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+    local target = GetClosestTargetFOV()
+    local part = target and target.Character and target.Character:FindFirstChild("Head")
+    local centerFOV = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+    if SilentAimEnabled and myHead and target and part then
+        local targetScreenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+        local t2D = Vector2.new(targetScreenPos.X, targetScreenPos.Y)
+        local my2D = Vector2.new(Camera:WorldToViewportPoint(myHead.Position).X, Camera:WorldToViewportPoint(myHead.Position).Y)
+        local distFromCenter = (t2D - centerFOV).Magnitude
+        -- เส้น TracerLine: หัวเรา->เป้า
+        TracerLine.From = my2D
+        TracerLine.To = t2D
+        TracerLine.Visible = distFromCenter <= FOVCircle.Radius
+        -- เส้น TargetLine: ระหว่างกลางจอ FOV->เป้าหมาย
+        TargetLine.From = centerFOV
+        TargetLine.To = t2D
+        TargetLine.Visible = distFromCenter <= FOVCircle.Radius
+    else
+        TracerLine.Visible = false
+        TargetLine.Visible = false
+    end
+end)
+
+-------------------------------------------------
+-- ESP ระบบบ็อกซ์/ชื่อ (ตามปกติ) ----------------
+-------------------------------------------------
+local boxESPEnabled = false
+local nameESPEnabled = false
+local espPlayers = {}
+
+ESPTab:Toggle({
+    Title = "Box ESP",
+    Default = false,
+    Callback = function(state)
+        boxESPEnabled = state
+    end
+})
+
+ESPTab:Toggle({
+    Title = "Name ESP",
+    Default = false,
+    Callback = function(state)
+        nameESPEnabled = state
+    end
+})
+
+local function createESP(player)
+    local lines = {
+        top = Drawing.new("Line"),
+        bottom = Drawing.new("Line"),
+        left = Drawing.new("Line"),
+        right = Drawing.new("Line"),
+    }
+    local nameText = Drawing.new("Text")
+    nameText.Size = 16
+    nameText.Center = true
+    nameText.Outline = true
+    nameText.Color = Color3.fromRGB(255, 0, 0)
+    nameText.Visible = false
+    for _, line in pairs(lines) do
+        line.Color = Color3.new(1, 1, 1)
+        line.Thickness = 1
+        line.Visible = false
+    end
+    local drawings = {lines.top, lines.bottom, lines.left, lines.right, nameText}
+    local conn = RunService.RenderStepped:Connect(function()
+        if not player.Character or not player.Character:FindFirstChild("Head") or not player.Character:FindFirstChild("HumanoidRootPart") then
+            for _, line in pairs(lines) do line.Visible = false end
+            nameText.Visible = false
+            return
+        end
+        local head = player.Character.Head
+        local hrp = player.Character.HumanoidRootPart
+        local topWorld = head.Position + Vector3.new(0, 1, 0)
+        local bottomWorld = hrp.Position - Vector3.new(0, 3.5, 0)
+        local top, onTop = Camera:WorldToViewportPoint(topWorld)
+        local bottom, onBottom = Camera:WorldToViewportPoint(bottomWorld)
+        if onTop and onBottom and top.Z > 0 and bottom.Z > 0 then
+            local height = math.abs(top.Y - bottom.Y) * 1.2
+            local width = height / 1.5
+            local x = top.X - width / 2
+            local y = top.Y - height * 0.1
+            local tl = Vector2.new(x, y)
+            local tr = Vector2.new(x + width, y)
+            local bl = Vector2.new(x, y + height)
+            local br = Vector2.new(x + width, y + height)
+            if boxESPEnabled then
+                lines.top.From = tl
+                lines.top.To = tr
+                lines.bottom.From = bl
+                lines.bottom.To = br
+                lines.left.From = tl
+                lines.left.To = bl
+                lines.right.From = tr
+                lines.right.To = br
+                for _, line in pairs(lines) do line.Visible = true end
+            else
+                for _, line in pairs(lines) do line.Visible = false end
+            end
+            if nameESPEnabled then
+                nameText.Text = player.Name
+                nameText.Position = Vector2.new(top.X, y - 16)
+                nameText.Visible = true
+            else
+                nameText.Visible = false
+            end
+        else
+            for _, line in pairs(lines) do line.Visible = false end
+            nameText.Visible = false
+        end
+    end)
+    espPlayers[player] = {conn = conn, drawings = drawings}
+end
+
+local function loadESP()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            createESP(player)
+        end
+    end
+    Players.PlayerAdded:Connect(function(player)
+        if player ~= LocalPlayer then
+            player.CharacterAdded:Connect(function()
+                wait(0.1)
+                createESP(player)
+            end)
+        end
+    end)
+    Players.PlayerRemoving:Connect(function(player)
+        if espPlayers[player] then
+            espPlayers[player].conn:Disconnect()
+            for _, drawing in pairs(espPlayers[player].drawings) do
+                drawing:Remove()
+            end
+            espPlayers[player] = nil
+        end
+    end)
+end
+
+loadESP()
