@@ -64,7 +64,7 @@ CombatTab:Toggle({
 })
 
 -------------------------------------------------
--- Silent Aim + FOV วงกลางจอ + เลเซอร์ + ล็อกคนใกล้สุด (ไม่มีเส้นจากหัวตัวเอง)
+-- Silent Aim + FOV วงกลางจอ + เลเซอร์ + ล็อกคนใกล้สุด + เส้นแดง + BulletSpeed=1000
 -------------------------------------------------
 local SilentAimEnabled = false
 local showFov = false
@@ -75,6 +75,12 @@ FOVCircle.Thickness = 2
 FOVCircle.Filled = false
 FOVCircle.Color = Color3.fromRGB(255,255,0)
 FOVCircle.Visible = false
+
+-- เอาเส้นสีฟ้าออก!
+-- local TracerLine = Drawing.new("Line")
+-- TracerLine.Color = Color3.fromRGB(0,255,255)
+-- TracerLine.Thickness = 2
+-- TracerLine.Visible = false
 
 local TargetLine = Drawing.new("Line")
 TargetLine.Color = Color3.fromRGB(255,50,50)
@@ -144,7 +150,7 @@ local function FireLaserEffect(fromPos, toPos, color, width, duration)
     Debris:AddItem(laser, duration or 0.2)
 end
 
--- hook Remote:Send, Net หรือ RemoteEvent
+-- Hook Remote:Send ยิง Silent Aim/เลเซอร์
 local send = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Send")
 local oldFire
 oldFire = hookfunction(send.FireServer,function(self,...)
@@ -177,17 +183,21 @@ oldFire = hookfunction(send.FireServer,function(self,...)
     return oldFire(self,unpack(args))
 end)
 
--- RenderStepped FOV + TargetLine (ไม่วาดเส้นหัวตัวเอง)
+-- RenderStepped FOV + เส้นแดงจากกลาง FOV ไปเป้า
 RunService.RenderStepped:Connect(function()
     FOVCircle.Position = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+    local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
     local target = GetClosestTargetFOV()
     local part = target and target.Character and target.Character:FindFirstChild("Head")
     local centerFOV = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
-    if SilentAimEnabled and target and part then
+
+    if SilentAimEnabled and myHead and target and part then
         local targetScreenPos = Camera:WorldToViewportPoint(part.Position)
         local t2D = Vector2.new(targetScreenPos.X, targetScreenPos.Y)
         local distFromCenter = (t2D - centerFOV).Magnitude
 
+        -- ไม่มีเส้นสีฟ้าแล้ว!
+        -- TargetLine (แดง) กลาง FOV->หัวเป้าปัจจุบัน
         TargetLine.From = centerFOV
         TargetLine.To = t2D
         TargetLine.Visible = distFromCenter <= FOVCircle.Radius
