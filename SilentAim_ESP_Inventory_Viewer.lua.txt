@@ -75,10 +75,10 @@ CombatTab:Toggle({
 })
 
 -------------------------------------------------
--- Silent Aim -----------------------------------
+-- Silent Aim + Velocity & FOV ---------
 -------------------------------------------------
 local SilentAimEnabled = false
-local BASE_PREDICTION = 0.15
+local BASE_PREDICTION = 0.14
 local FOVCircle = Drawing.new("Circle")
 FOVCircle.Radius = 120
 FOVCircle.Thickness = 2
@@ -119,36 +119,80 @@ CombatTab:Slider({
     end
 })
 
-local function PredictPosition(headPart)
-    local root = headPart.Parent:FindFirstChild("HumanoidRootPart")
-    if not root then return headPart.Position end
-    local vel = root.Velocity
-    return headPart.Position + (vel * BASE_PREDICTION)
+-- จับ Velocity ด้วยเวลา frame
+local velocity = Vector3.new(0,0,0)
+local velocityRecord = {}
+local lastTargetId = nil
+local lastHeadPos = nil
+local lastHeadTime = nil
+
+local function UpdateTargetVelocity(target)
+    if not (target and target.Character and target.Character:FindFirstChild("Head")) then return Vector3.new(0,0,0) end
+    local head = target.Character.Head
+    local now = tick()
+    if lastTargetId ~= target.UserId then
+        lastHeadPos = head.Position
+        lastHeadTime = now
+        lastTargetId = target.UserId
+        return Vector3.new(0,0,0)
+    else
+        local dt = now - (lastHeadTime or now)
+        lastHeadTime = now
+        local vel = Vector3.new(0,0,0)
+        if dt > 0 and lastHeadPos then
+            vel = (head.Position - lastHeadPos) / dt
+        end
+        lastHeadPos = head.Position
+        velocity = vel
+        return vel
+    end
 end
 
-local function GetTargetPart(character)
-    return character and character:FindFirstChild("Head")
+local function PredictPositionUsingVelocity(head, predictionTime, vel)
+    return head.Position + (vel * predictionTime)
 end
 
-local function GetClosestTarget()
+local function GetClosestTargetFOV()
     local closest
     local shortest = math.huge
     local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
     for _,plr in pairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and plr.Character then
-            local part = GetTargetPart(plr.Character)
-            if part then
-                local screenPos,_ = Camera:WorldToViewportPoint(part.Position)
-                local dist = (Vector2.new(screenPos.X,screenPos.Y)-center).Magnitude
-                if (not showFov or dist<=FOVCircle.Radius) and dist<shortest then
-                    shortest = dist
-                    closest = plr
-                end
+        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("Head") then
+            local head = plr.Character.Head
+            local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+            local dist = (Vector2.new(screenPos.X,screenPos.Y)-center).Magnitude
+            if onScreen and dist < FOVCircle.Radius and dist < shortest then
+                shortest = dist
+                closest = plr
             end
         end
     end
     return closest
 end
+
+local send = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Send")
+local oldFire
+oldFire = hookfunction(send.FireServer,function(self,...)
+    local args = {...}
+    if SilentAimEnabled then
+        local target = GetClosestTargetFOV()
+        if target and target.Character then
+            local head = target.Character:FindFirstChild("Head")
+            if head then
+                -- อัปเดต velocity ขณะยิง
+                local vel = UpdateTargetVelocity(target)
+                local aimPos = PredictPositionUsingVelocity(head, BASE_PREDICTION, vel)
+                args[4] = CFrame.new(math.huge,math.huge,math.huge,0,0,0,0,0,0,0,0,0)
+                args[5] = {[1]={[1]={["Instance"]=head,["Position"]=aimPos}}}
+                local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+                if myHead then
+                    SpawnDebugBullet(myHead.Position,aimPos)
+                end
+            end
+        end
+    end
+    return oldFire(self,unpack(args))
+end)
 
 local function SpawnDebugBullet(startPos,targetPos)
     local dist = (targetPos-startPos).Magnitude
@@ -163,37 +207,17 @@ local function SpawnDebugBullet(startPos,targetPos)
     Debris:AddItem(part,5)
 end
 
-local send = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Send")
-local oldFire
-oldFire = hookfunction(send.FireServer,function(self,...)
-    local args = {...}
-    if SilentAimEnabled then
-        local target = GetClosestTarget()
-        if target and target.Character then
-            local head = target.Character:FindFirstChild("Head")
-            if head then
-                local aimPos = PredictPosition(head)
-                args[4] = CFrame.new(math.huge,math.huge,math.huge,0,0,0,0,0,0,0,0,0)
-                args[5] = {[1]={[1]={["Instance"]=head,["Position"]=aimPos}}}
-                local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-                if myHead then
-                    SpawnDebugBullet(myHead.Position,aimPos)
-                end
-            end
-        end
-    end
-    return oldFire(self,unpack(args))
-end)
-
 RunService.RenderStepped:Connect(function()
     FOVCircle.Position = Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)
     if SilentAimEnabled then
         local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-        local target = GetClosestTarget()
-        local targetHead = target and target.Character and target.Character:FindFirstChild("Head")
-        if myHead and targetHead then
+        local target = GetClosestTargetFOV()
+        if target and target.Character and target.Character:FindFirstChild("Head") then
+            local targetHead = target.Character.Head
+            local vel = UpdateTargetVelocity(target)
+            local aimPos = PredictPositionUsingVelocity(targetHead, BASE_PREDICTION, vel)
             local my2D = Vector2.new(Camera:WorldToViewportPoint(myHead.Position).X,Camera:WorldToViewportPoint(myHead.Position).Y)
-            local t2D = Vector2.new(Camera:WorldToViewportPoint(targetHead.Position).X,Camera:WorldToViewportPoint(targetHead.Position).Y)
+            local t2D = Vector2.new(Camera:WorldToViewportPoint(aimPos).X, Camera:WorldToViewportPoint(aimPos).Y)
             local distFromCenter = (t2D - Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)).Magnitude
             if not showFov or distFromCenter<=FOVCircle.Radius then
                 TracerLine.From = my2D
