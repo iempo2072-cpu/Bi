@@ -31,7 +31,6 @@ local Window = WindUI:CreateWindow({
 
 local CombatTab = Window:Tab({Title = "Combat", Icon = "sword"})
 local ESPTab = Window:Tab({Title = "ESP", Icon = "eye"})
-local CrateTab = Window:Tab({Title = "ข้ามสุ่มกล่อง", Icon = "package"})
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -76,9 +75,10 @@ CombatTab:Toggle({
 })
 
 -------------------------------------------------
--- Silent Aim คำนวณ velocity จริง ----------------
+-- Silent Aim + สลับ Head/HRP ด้วย AttachAntiAim ---
 -------------------------------------------------
 local SilentAimEnabled = false
+local AttachAntiAim = false
 local BASE_PREDICTION = 0.14
 local FOVCircle = Drawing.new("Circle")
 FOVCircle.Radius = 120
@@ -120,7 +120,15 @@ CombatTab:Slider({
     end
 })
 
--- Velocity calculation
+CombatTab:Toggle({
+    Title = "Attach AntiAim (ยิง HRP เมื่อเปิด)",
+    Default = false,
+    Callback = function(v)
+        AttachAntiAim = v
+    end
+})
+
+-- ========== SilentAim ฟังก์ชันทั้ง 2 โหมด ==========
 local velocity = Vector3.new(0,0,0)
 local lastTargetId = nil
 local lastHeadPos = nil
@@ -148,13 +156,33 @@ local function UpdateTargetVelocity(target)
     end
 end
 
-local function PredictPositionUsingVelocity(head, predictionTime, vel)
-    return head.Position + (vel * predictionTime)
+local function PredictPositionHead(head, vel, predictionTime)
+    return head.Position + (vel * (predictionTime or BASE_PREDICTION))
 end
 
-local function GetClosestTargetFOV()
-    local closest
-    local shortest = math.huge
+local function PredictPositionHRP(hrp, predTime)
+    return hrp.Position + hrp.Velocity * (predTime or BASE_PREDICTION)
+end
+
+local function GetClosestTargetHRP()
+    local closest, shortest = nil, math.huge
+    local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+    for _,plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+            local hrp = plr.Character.HumanoidRootPart
+            local screenPos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+            local dist = (Vector2.new(screenPos.X,screenPos.Y)-center).Magnitude
+            if onScreen and dist < FOVCircle.Radius and dist < shortest then
+                shortest = dist
+                closest = plr
+            end
+        end
+    end
+    return closest
+end
+
+local function GetClosestTargetHead()
+    local closest, shortest = nil, math.huge
     local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
     for _,plr in pairs(Players:GetPlayers()) do
         if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("Head") then
@@ -175,26 +203,27 @@ local oldFire
 oldFire = hookfunction(send.FireServer,function(self,...)
     local args = {...}
     if SilentAimEnabled then
-        local target = GetClosestTargetFOV()
-        if target and target.Character then
-            local head = target.Character:FindFirstChild("Head")
-            if head then
-                local vel = UpdateTargetVelocity(target)
-                local aimPos = PredictPositionUsingVelocity(head, BASE_PREDICTION, vel)
-                args[4] = CFrame.new(math.huge,math.huge,math.huge,0,0,0,0,0,0,0,0,0)
-                args[5] = {[1]={[1]={["Instance"]=head,["Position"]=aimPos}}}
-                local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-                if myHead then
-                    local dist = (aimPos-myHead.Position).Magnitude
-                    local bullet = Instance.new("Part")
-                    bullet.Anchored = true
-                    bullet.CanCollide = false
-                    bullet.Material = Enum.Material.Neon
-                    bullet.Size = Vector3.new(0.1,0.1,dist)
-                    bullet.CFrame = CFrame.new(myHead.Position,aimPos)*CFrame.new(0,0,-dist/2)
-                    bullet.Color = Color3.fromRGB(50,255,150)
-                    bullet.Parent = workspace
-                    Debris:AddItem(bullet,3)
+        if AttachAntiAim then
+            -- ยิง HRP ทะลุ anti aim
+            local target = GetClosestTargetHRP()
+            if target and target.Character then
+                local hrp = target.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local aimPos = PredictPositionHRP(hrp, BASE_PREDICTION)
+                    args[4] = CFrame.new(math.huge,math.huge,math.huge)
+                    args[5] = {[1] = {[1] = {["Instance"]=hrp, ["Position"]=aimPos}}}
+                end
+            end
+        else
+            -- ยิง Head แบบเดิม
+            local target = GetClosestTargetHead()
+            if target and target.Character then
+                local head = target.Character:FindFirstChild("Head")
+                if head then
+                    local vel = UpdateTargetVelocity(target)
+                    local aimPos = PredictPositionHead(head, vel, BASE_PREDICTION)
+                    args[4] = CFrame.new(math.huge,math.huge,math.huge,0,0,0,0,0,0,0,0,0)
+                    args[5] = {[1] = {[1] = {["Instance"]=head, ["Position"]=aimPos}}}
                 end
             end
         end
@@ -204,68 +233,7 @@ end)
 
 RunService.RenderStepped:Connect(function()
     FOVCircle.Position = Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)
-    if SilentAimEnabled then
-        local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-        local target = GetClosestTargetFOV()
-        if target and target.Character and target.Character:FindFirstChild("Head") then
-            local targetHead = target.Character.Head
-            local vel = UpdateTargetVelocity(target)
-            local aimPos = PredictPositionUsingVelocity(targetHead, BASE_PREDICTION, vel)
-            local my2D = Vector2.new(Camera:WorldToViewportPoint(myHead.Position).X,Camera:WorldToViewportPoint(myHead.Position).Y)
-            local t2D = Vector2.new(Camera:WorldToViewportPoint(aimPos).X, Camera:WorldToViewportPoint(aimPos).Y)
-            local distFromCenter = (t2D - Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)).Magnitude
-            if not showFov or distFromCenter<=FOVCircle.Radius then
-                TracerLine.From = my2D
-                TracerLine.To = t2D
-                TracerLine.Visible = true
-            else
-                TracerLine.Visible = false
-            end
-        else
-            TracerLine.Visible = false
-        end
-    else
-        TracerLine.Visible = false
-    end
 end)
-
--------------------------------------------------
--- ข้ามการสุ่มกล่อง/รับไอเทมที่ต้องการ ---------
--------------------------------------------------
-local wantedItem = "LegendaryRifle"
-local boxType = "rifle"
-
-CrateTab:TextBox({
-    Title = "ชื่อไอเทม (ตรงกับระบบเกม)",
-    Placeholder = "เช่น LegendaryRifle",
-    Callback = function(val)
-        wantedItem = val
-    end
-})
-
-CrateTab:Dropdown({
-    Title = "ประเภทกล่อง",
-    Options = {"pistol", "rifle", "sniper"},
-    Default = "rifle",
-    Callback = function(val)
-        boxType = val
-    end
-})
-
-CrateTab:Button({
-    Title = "ข้ามสุ่ม! รับไอเทมนี้ทันที",
-    Callback = function()
-        local RemoteBox = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("OpenBox")
-        if RemoteBox then
-            RemoteBox:FireServer("open", {
-                ["BoxType"] = boxType,
-                ["ChosenItem"] = wantedItem
-            })
-        else
-            warn("ไม่พบ Remote OpenBox ในเกมนี้!")
-        end
-    end
-})
 
 -------------------------------------------------
 -- ESP ระบบบ็อกซ์/ชื่อ --------------------------
