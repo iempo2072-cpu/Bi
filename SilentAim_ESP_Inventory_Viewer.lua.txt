@@ -76,7 +76,7 @@ CombatTab:Toggle({
 })
 
 -------------------------------------------------
--- Silent Aim + Velocity & FOV คม+จริง ---------
+-- Silent Aim คำนวณ velocity จริง ----------------
 -------------------------------------------------
 local SilentAimEnabled = false
 local BASE_PREDICTION = 0.14
@@ -120,14 +120,13 @@ CombatTab:Slider({
     end
 })
 
--- ------ Velocity Calculations -------------
+-- Velocity calculation
 local velocity = Vector3.new(0,0,0)
 local lastTargetId = nil
 local lastHeadPos = nil
 local lastHeadTime = nil
 
 local function UpdateTargetVelocity(target)
-    -- จับเวลาและคำนวณ velocity
     if not (target and target.Character and target.Character:FindFirstChild("Head")) then return Vector3.new(0,0,0) end
     local head = target.Character.Head
     local now = tick()
@@ -154,7 +153,6 @@ local function PredictPositionUsingVelocity(head, predictionTime, vel)
 end
 
 local function GetClosestTargetFOV()
-    -- หาคนที่ใกล้ FOV ตรงกลางจอสุด
     local closest
     local shortest = math.huge
     local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
@@ -180,7 +178,6 @@ oldFire = hookfunction(send.FireServer,function(self,...)
         local target = GetClosestTargetFOV()
         if target and target.Character then
             local head = target.Character:FindFirstChild("Head")
-            -- อัปเดต velocity ตรงจุดยิง
             if head then
                 local vel = UpdateTargetVelocity(target)
                 local aimPos = PredictPositionUsingVelocity(head, BASE_PREDICTION, vel)
@@ -188,7 +185,6 @@ oldFire = hookfunction(send.FireServer,function(self,...)
                 args[5] = {[1]={[1]={["Instance"]=head,["Position"]=aimPos}}}
                 local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
                 if myHead then
-                    -- Optional Bullet Debug
                     local dist = (aimPos-myHead.Position).Magnitude
                     local bullet = Instance.new("Part")
                     bullet.Anchored = true
@@ -236,7 +232,7 @@ end)
 -------------------------------------------------
 -- ข้ามการสุ่มกล่อง/รับไอเทมที่ต้องการ ---------
 -------------------------------------------------
-local wantedItem = "LegendaryRifle" -- ชื่อไอเทมที่ต้องการได้
+local wantedItem = "LegendaryRifle"
 local boxType = "rifle"
 
 CrateTab:TextBox({
