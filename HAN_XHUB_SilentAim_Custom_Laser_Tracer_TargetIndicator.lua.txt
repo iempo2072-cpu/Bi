@@ -46,7 +46,7 @@ local Camera = workspace.CurrentCamera
 local aaEnabled = false
 local aaRadius = 14
 local aaSpeed = 0.085
-local velocityPower = 90
+local velocityPower = 5000
 local hrp
 local aaConn
 
@@ -106,8 +106,8 @@ setreadonly(mt, true)
 
 
 -------------------------------------------------
--- Silent Aim (Auto AntiAim TARGET detect only, NO toggle for attach anti aim)
--- เพิ่มฟีเจอร์: ยิงตรง (Shoot Direct) เลือก Aim Part (Head/HRP)
+-- Silent Aim System (Per-player full system)
+-- เอา ShootDirect ออก และรวมการคำนวณทั้งหมดในระบบผู้เล่น
 -------------------------------------------------
 local SilentAimEnabled = false
 local BASE_PREDICTION = 0.14
@@ -123,17 +123,136 @@ local TracerLine = Drawing.new("Line")
 TracerLine.Color = Color3.fromRGB(0,255,255)
 TracerLine.Thickness = 2
 TracerLine.Visible = false
+local showTracer = true
+local tracerColor = Color3.fromRGB(255,120,120)
 
--- New: Shoot Direct toggle + part selection
-local ShootDirect = false
-local DirectAimPart = "Head" -- "Head" or "HumanoidRootPart"
+-- AimSystem: per-player tracking and utilities
+local AimSystem = {
+    players = {}, -- [userId] = {lastPos = Vector3, lastTime = number, velBuf = {}, bufSize = 7}
+    antiaimThreshold = 3.5,
+    bufSize = 7,
+    basePrediction = BASE_PREDICTION
+}
 
+function AimSystem:Ensure(p)
+    if not p then return end
+    local id = p.UserId
+    if not self.players[id] then
+        self.players[id] = {
+            lastHeadPos = nil,
+            lastTime = nil,
+            velBuf = {}
+        }
+    end
+    return self.players[id]
+end
+
+function AimSystem:UpdatePlayerVelocity(p)
+    if not (p and p.Character and p.Character:FindFirstChild("Head")) then return Vector3.new(0,0,0) end
+    local data = self:Ensure(p)
+    local head = p.Character.Head
+    local now = tick()
+    if data.lastHeadPos == nil or data.lastTime == nil or data.lastHeadPos == Vector3.new(0,0,0) then
+        data.lastHeadPos = head.Position
+        data.lastTime = now
+        data.velBuf = {}
+        return Vector3.new(0,0,0)
+    end
+    local dt = now - data.lastTime
+    data.lastTime = now
+    if dt <= 0 then return Vector3.new(0,0,0) end
+    local vel = (head.Position - data.lastHeadPos) / dt
+    data.lastHeadPos = head.Position
+    table.insert(data.velBuf, vel.Magnitude)
+    if #data.velBuf > self.bufSize then table.remove(data.velBuf, 1) end
+    return vel
+end
+
+function AimSystem:IsAntiAiming(p)
+    if not (p and p.UserId) then return false end
+    local data = self.players[p.UserId]
+    if not data or #data.velBuf < 3 then return false end
+    local sum = 0
+    for _,v in ipairs(data.velBuf) do sum = sum + v end
+    local avg = sum / #data.velBuf
+    return avg > self.antiaimThreshold
+end
+
+function AimSystem:GetPredictedPositionForHead(p, predictionTime)
+    predictionTime = predictionTime or self.basePrediction
+    if not (p and p.Character and p.Character:FindFirstChild("Head")) then return nil end
+    local head = p.Character.Head
+    local vel = self:UpdatePlayerVelocity(p)
+    return head.Position + vel * predictionTime, head
+end
+
+function AimSystem:GetPredictedPositionForHRP(p, predictionTime)
+    predictionTime = predictionTime or self.basePrediction
+    if not (p and p.Character and p.Character:FindFirstChild("HumanoidRootPart")) then return nil end
+    local hrp = p.Character.HumanoidRootPart
+    return hrp.Position + hrp.Velocity * predictionTime, hrp
+end
+
+function AimSystem:GetBestTargetInFOV()
+    local closest, shortest = nil, math.huge
+    local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+    if not myHead then return nil end
+    for _,plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("Head") then
+            local head = plr.Character.Head
+            local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+            local distFov = (Vector2.new(screenPos.X,screenPos.Y) - Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)).Magnitude
+            local distWorld = (head.Position - myHead.Position).Magnitude
+            if onScreen and distFov <= FOVCircle.Radius then
+                if distWorld < shortest then
+                    shortest = distWorld
+                    closest = plr
+                end
+            end
+        end
+    end
+    return closest
+end
+
+-- WallCheck unchanged
+local function WallCheck(startPos, endPos)
+    local dir = (endPos - startPos).Unit
+    local dist = (endPos - startPos).Magnitude
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {LocalPlayer.Character}
+    local result = workspace:Raycast(startPos, dir * dist, params)
+    if result and result.Instance then
+        if not result.Instance:IsDescendantOf(LocalPlayer.Character)
+            and not (result.Instance.Name:find("Head") or result.Instance.Name:find("HumanoidRootPart"))
+        then
+            return true -- เจอสิ่งกีดขวาง/กำแพง
+        end
+    end
+    return false
+end
+
+-- Visual effects (laser, bullet) - uses predicted aimPos now
+local function FireLaserEffect(fromPos, toPos, color, width, duration)
+    local laser = Instance.new("Part")
+    laser.Anchored = true
+    laser.CanCollide = false
+    laser.Material = Enum.Material.Neon
+    laser.Color = color or Color3.fromRGB(0,255,0)
+    local dist = (toPos-fromPos).Magnitude
+    laser.Size = Vector3.new(width or 0.16, width or 0.16, dist)
+    laser.CFrame = CFrame.new(fromPos, toPos) * CFrame.new(0, 0, -dist/2)
+    laser.Parent = workspace
+    Debris:AddItem(laser, duration or 0.22)
+end
+
+-- UI: SilentAim, FOV, prediction, antiaim settings, tracer settings
 CombatTab:Toggle({
     Title = "Enable Silent Aim (Auto Detect)",
     Default = false,
     Callback = function(v)
         SilentAimEnabled = v
-        TracerLine.Visible = v and TracerLine.Visible
+        TracerLine.Visible = v and TracerLine.Visible and showTracer
     end
 })
 
@@ -155,165 +274,76 @@ CombatTab:Slider({
     end
 })
 
--- Add Shoot Direct toggle and part dropdown
-CombatTab:Toggle({
-    Title = "Shoot Direct (ยิงตรง)",
-    Default = false,
+CombatTab:Slider({
+    Title = "Base Prediction (ms fraction)",
+    Step = 0.01,
+    Value = {Min = 0.00, Max = 0.5, Default = AimSystem.basePrediction},
     Callback = function(v)
-        ShootDirect = v
-        WindUI:Notify({Title = "Shoot Direct", Description = (v and "เปิด" or "ปิด"), Duration = 1.5})
+        AimSystem.basePrediction = tonumber(v)
+        BASE_PREDICTION = AimSystem.basePrediction
     end
 })
 
-CombatTab:Dropdown({
-    Title = "Direct Aim Part",
-    List = {"Head", "HumanoidRootPart"},
-    Default = "Head",
-    Callback = function(selection)
-        DirectAimPart = selection
-        WindUI:Notify({Title = "Direct Aim Part", Description = selection, Duration = 1})
+CombatTab:Slider({
+    Title = "Antiaim Threshold",
+    Step = 0.1,
+    Value = {Min = 0.5, Max = 10, Default = AimSystem.antiaimThreshold},
+    Callback = function(v)
+        AimSystem.antiaimThreshold = tonumber(v)
     end
 })
 
-local velocity = Vector3.new(0,0,0)
-local lastTargetId = nil
-local lastHeadPos = nil
-local lastHeadTime = nil
-local antiaimMemory = {}
-local antiaimThreshold = 3.5
-
-local function UpdateTargetVelocity(target)
-    if not (target and target.Character and target.Character:FindFirstChild("Head")) then return Vector3.new(0,0,0) end
-    local head = target.Character.Head
-    local now = tick()
-    if lastTargetId ~= target.UserId then
-        lastHeadPos = head.Position
-        lastHeadTime = now
-        lastTargetId = target.UserId
-        antiaimMemory[target.UserId] = {}
-        return Vector3.new(0,0,0)
-    else
-        local dt = now - (lastHeadTime or now)
-        lastHeadTime = now
-        local vel = Vector3.new(0,0,0)
-        if dt > 0 and lastHeadPos then
-            vel = (head.Position - lastHeadPos) / dt
-            local buf = antiaimMemory[target.UserId]
-            if buf then
-                table.insert(buf, vel.Magnitude)
-                if #buf > 7 then table.remove(buf, 1) end
-            end
-        end
-        lastHeadPos = head.Position
-        velocity = vel
-        return vel
+CombatTab:Slider({
+    Title = "Velocity Memory Size",
+    Step = 1,
+    Value = {Min = 3, Max = 20, Default = AimSystem.bufSize},
+    Callback = function(v)
+        AimSystem.bufSize = tonumber(v)
     end
-end
+})
 
-local function IsTargetAntiAim(target)
-    local mem = antiaimMemory[target.UserId]
-    if mem and #mem >= 5 then
-        local avg = 0
-        for _,v in ipairs(mem) do avg = avg + v end
-        avg = avg / #mem
-        return avg > antiaimThreshold
+CombatTab:Toggle({
+    Title = "Show Tracer",
+    Default = true,
+    Callback = function(v)
+        showTracer = v
+        TracerLine.Visible = SilentAimEnabled and v
     end
-    return false
-end
+})
 
-local function PredictPositionUsingVelocity(head, predictionTime, vel)
-    return head.Position + (vel * predictionTime)
-end
-
-local function PredictPositionUsingHRP(hrp, predictionTime)
-    return hrp.Position + (hrp.Velocity * predictionTime)
-end
-
-local function WallCheck(startPos, endPos)
-    local dir = (endPos - startPos).Unit
-    local dist = (endPos - startPos).Magnitude
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {LocalPlayer.Character}
-    local result = workspace:Raycast(startPos, dir * dist, params)
-    if result and result.Instance then
-        if not result.Instance:IsDescendantOf(LocalPlayer.Character)
-            and not (result.Instance.Name:find("Head") or result.Instance.Name:find("HumanoidRootPart"))
-        then
-            return true -- เจอสิ่งกีดขวาง/กำแพง
-        end
+CombatTab:ColorPicker({
+    Title = "Tracer Color",
+    Default = tracerColor,
+    Callback = function(col)
+        tracerColor = col
     end
-    return false
-end
+})
 
-local function GetClosestTargetFOV()
-    -- ล็อกเป้าคน "ใกล้หัวเรา" ที่สุดใน FOV จริงๆ
-    local closest, shortest = nil, math.huge
-    local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-    if not myHead then return nil end
-    for _,plr in pairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("Head") then
-            local head = plr.Character.Head
-            local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
-            local distFov = (Vector2.new(screenPos.X,screenPos.Y) - Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)).Magnitude
-            local distWorld = (head.Position - myHead.Position).Magnitude
-            if onScreen and distFov <= FOVCircle.Radius then
-                if distWorld < shortest then
-                    shortest = distWorld
-                    closest = plr
-                end
-            end
-        end
-    end
-    return closest
-end
-
-local function FireLaserEffect(fromPos, toPos, color, width, duration)
-    local laser = Instance.new("Part")
-    laser.Anchored = true
-    laser.CanCollide = false
-    laser.Material = Enum.Material.Neon
-    laser.Color = color or Color3.fromRGB(0,255,0)
-    local dist = (toPos-fromPos).Magnitude
-    laser.Size = Vector3.new(width or 0.16, width or 0.16, dist)
-    laser.CFrame = CFrame.new(fromPos, toPos) * CFrame.new(0, 0, -dist/2)
-    laser.Parent = workspace
-    Debris:AddItem(laser, duration or 0.22)
-end
-
+-- Hook send.FireServer to modify bullet aim using AimSystem results
 local send = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Send")
 local oldFire
 oldFire = hookfunction(send.FireServer,function(self,...)
     local args = {...}
     if SilentAimEnabled then
-        local target = GetClosestTargetFOV()
+        local target = AimSystem:GetBestTargetInFOV()
         if target and target.Character then
             local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-            local part, aimPos = nil, nil
+            if not myHead then return oldFire(self,unpack(args)) end
 
-            -- If ShootDirect enabled: aim straight at chosen part position (no prediction)
-            if ShootDirect then
-                part = target.Character:FindFirstChild(DirectAimPart) or target.Character:FindFirstChild("Head") or target.Character:FindFirstChild("HumanoidRootPart")
-                if part then
-                    aimPos = part.Position
-                end
-            else
-                -- Existing auto-detection + prediction logic
-                local useHRP = false
-                if IsTargetAntiAim(target) then
-                    useHRP = true
-                end
-                if useHRP and target.Character:FindFirstChild("HumanoidRootPart") then
-                    part = target.Character:FindFirstChild("HumanoidRootPart")
-                    aimPos = PredictPositionUsingHRP(part, BASE_PREDICTION)
-                elseif target.Character:FindFirstChild("Head") then
-                    part = target.Character:FindFirstChild("Head")
-                    local vel = UpdateTargetVelocity(target)
-                    aimPos = PredictPositionUsingVelocity(part, BASE_PREDICTION, vel)
-                end
+            -- Determine whether target is anti-aiming
+            local useHRP = false
+            if AimSystem:IsAntiAiming(target) then
+                useHRP = true
             end
 
-            if part and aimPos and myHead then
+            local aimPos, part = nil, nil
+            if useHRP and target.Character:FindFirstChild("HumanoidRootPart") then
+                aimPos, part = AimSystem:GetPredictedPositionForHRP(target, AimSystem.basePrediction)
+            elseif target.Character:FindFirstChild("Head") then
+                aimPos, part = AimSystem:GetPredictedPositionForHead(target, AimSystem.basePrediction)
+            end
+
+            if aimPos and part then
                 local wall = WallCheck(myHead.Position, aimPos)
                 if wall then
                     args[4] = CFrame.new(math.huge,math.huge,math.huge)
@@ -322,35 +352,45 @@ oldFire = hookfunction(send.FireServer,function(self,...)
                     args[4] = CFrame.new(aimPos)
                     args[5] = {[1] = {[1] = {["Instance"]=part,["Position"]=aimPos}}}
                 end
-                -- เลเซอร์เฉพาะตอนยิงจริง!
-                FireLaserEffect(myHead.Position, part.Position, Color3.fromRGB(255, 120, 120), 0.17, 0.18)
-                -- Bullet effect
-                local dist = (aimPos-myHead.Position).Magnitude
-                local bullet = Instance.new("Part")
-                bullet.Anchored = true
-                bullet.CanCollide = false
-                bullet.Material = Enum.Material.Neon
-                bullet.Size = Vector3.new(0.1,0.1,dist)
-                bullet.CFrame = CFrame.new(myHead.Position,aimPos)*CFrame.new(0,0,-dist/2)
-                bullet.Color = Color3.fromRGB(255,120,120)
-                bullet.Parent = workspace
-                Debris:AddItem(bullet,2.7)
+                -- Visual effects
+                if showTracer then
+                    FireLaserEffect(myHead.Position, aimPos, tracerColor, 0.17, 0.18)
+                    local dist = (aimPos-myHead.Position).Magnitude
+                    local bullet = Instance.new("Part")
+                    bullet.Anchored = true
+                    bullet.CanCollide = false
+                    bullet.Material = Enum.Material.Neon
+                    bullet.Size = Vector3.new(0.1,0.1,dist)
+                    bullet.CFrame = CFrame.new(myHead.Position,aimPos)*CFrame.new(0,0,-dist/2)
+                    bullet.Color = tracerColor
+                    bullet.Parent = workspace
+                    Debris:AddItem(bullet,2.7)
+                end
             end
         end
     end
     return oldFire(self,unpack(args))
 end)
 
+-- Update Tracer + FOV circle each frame and maintain AimSystem velocity updates for all players
 RunService.RenderStepped:Connect(function()
     FOVCircle.Position = Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)
+
+    -- Update velocities for players we track (keeps antiaim detection running)
+    for _,plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("Head") then
+            AimSystem:UpdatePlayerVelocity(plr)
+        end
+    end
+
     local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-    local target = GetClosestTargetFOV()
+    local target = AimSystem:GetBestTargetInFOV()
     local part = nil
     if target then
-        if IsTargetAntiAim(target) then
-            part = target.Character:FindFirstChild("HumanoidRootPart")
+        if AimSystem:IsAntiAiming(target) then
+            part = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
         else
-            part = target.Character:FindFirstChild("Head")
+            part = target.Character and target.Character:FindFirstChild("Head")
         end
     end
     if SilentAimEnabled and myHead and part then
@@ -360,7 +400,8 @@ RunService.RenderStepped:Connect(function()
         if not showFov or distFromCenter<=FOVCircle.Radius then
             TracerLine.From = my2D
             TracerLine.To = t2D
-            TracerLine.Visible = true
+            TracerLine.Color = tracerColor
+            TracerLine.Visible = showTracer
         else
             TracerLine.Visible = false
         end
