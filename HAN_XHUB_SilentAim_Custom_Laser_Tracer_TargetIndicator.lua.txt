@@ -1,390 +1,183 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local Debris = game:GetService("Debris")
-local TweenService = game:GetService("TweenService")
-
 local lp = Players.LocalPlayer
+local playerGui = lp:WaitForChild("PlayerGui")
 
--- persistent globals (safe across script reloads)
-_G._downedProtect = _G._downedProtect or {}
-local state = _G._downedProtect
-
-state.separatedParts = state.separatedParts or {}       -- map origPart -> {orig, clone, baseSize}
-state.isSeparated = state.isSeparated or false
-state.separateConn = state.separateConn or nil
-state.antiKillConns = state.antiKillConns or {}         -- map humanoid -> conns
-
--- Master config controlled by a single GUI toggle
-local Config = {
-    Enabled = false,           -- master switch (single GUI toggle)
-    -- visual/separate settings
-    StretchAmount = 2.8,
-    SpreadRadius = 18,
-    Pulsate = true,
-    PulsateMagnitude = 0.28,
-    PulsateSpeed = 2.4,
-    -- anti-kill settings
-    AntiKillEnabled = true,
-    ProtectHealth = 2,
-    AutoRevive = true,
-    MaxHealthOverride = 10000,
-    ReviveDelay = 0.08,
-}
-
--- Utilities
+-- Helpers to safely call optional functions exported elsewhere
 local function safeCall(fn, ...)
+    if type(fn) ~= "function" then return false end
     local ok, res = pcall(fn, ...)
     return ok, res
 end
 
-local function isBasePart(obj)
-    return obj and obj:IsA and obj:IsA("BasePart")
+-- Try to find module/global API from previous scripts
+-- They might be globals: Config, separateModel, restoreModel, attachAntiKill, detachAntiKill
+local DP_Config = rawget(_G, "DownedProtectConfig") or rawget(_G, "Config") or (rawget(_G, "_downedProtect") and rawget(_G, "_downedProtect").Config)
+local separateModel = rawget(_G, "separateModel")
+local restoreModel = rawget(_G, "restoreModel")
+local attachAntiKill = rawget(_G, "attachAntiKill")
+local detachAntiKill = rawget(_G, "detachAntiKill")
+
+-- Fallback config if none exists
+if not DP_Config then
+    DP_Config = { Enabled = false, HealthTrigger = 30, AntiKillEnabled = true, StretchAmount = 2.8, SpreadRadius = 18 }
+    rawset(_G, "DownedProtectConfig", DP_Config)
 end
 
--- Create clone for a base part using Config values
-local function createCloneForPart(part)
-    local stretch = Config.StretchAmount
-    local spread = Config.SpreadRadius
+-- Create ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "DownedProtectToggleGUI"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
 
-    local clone = part:Clone()
-    clone.Name = part.Name .. "_downed_clone"
-    clone.Parent = workspace
-    clone.CanCollide = false
-    clone.Anchored = false
-    clone.Transparency = 0
-    clone.Size = Vector3.new(
-        math.max(0.05, part.Size.X * (1 + (stretch - 1) * 0.28)),
-        math.max(0.05, part.Size.Y * stretch),
-        math.max(0.05, part.Size.Z * (1 + (stretch - 1) * 0.28))
-    )
+-- Main frame
+local frame = Instance.new("Frame")
+frame.Name = "Main"
+frame.Size = UDim2.new(0, 220, 0, 110)
+frame.Position = UDim2.new(0, 16, 0, 120)
+frame.BackgroundTransparency = 0.18
+frame.BackgroundColor3 = Color3.fromRGB(28,28,30)
+frame.BorderSizePixel = 0
+frame.AnchorPoint = Vector2.new(0,0)
+frame.Parent = screenGui
+frame.LayoutOrder = 1
+frame.ClipsDescendants = true
+frame.Visible = true
 
-    -- random offset direction & initial placement
-    local rx = (math.random() - 0.5)
-    local ry = (math.random() * 0.8) - 0.4
-    local rz = (math.random() - 0.5)
-    local dir = Vector3.new(rx, ry, rz)
-    if dir.Magnitude == 0 then dir = Vector3.new(0.1, 0, 0) end
-    dir = dir.Unit
-    local offset = dir * (math.random() * spread)
-    clone.CFrame = part.CFrame * CFrame.new(offset)
+-- Title
+local title = Instance.new("TextLabel")
+title.Name = "Title"
+title.Size = UDim2.new(1, -12, 0, 26)
+title.Position = UDim2.new(0, 6, 0, 6)
+title.BackgroundTransparency = 1
+title.Text = "Downed Protection"
+title.TextColor3 = Color3.fromRGB(235,235,235)
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Font = Enum.Font.GothamBold
+title.TextSize = 14
+title.Parent = frame
 
-    -- body velocity for outward push (temporary)
-    local bv = Instance.new("BodyVelocity")
-    bv.MaxForce = Vector3.new(1e6, 1e6, 1e6)
-    bv.Velocity = dir * (25 * math.clamp(stretch, 1, 6)) + Vector3.new(0, -12, 0)
-    bv.P = 3000
-    bv.Parent = clone
-    Debris:AddItem(bv, 0.9)
+-- Status label
+local status = Instance.new("TextLabel")
+status.Name = "Status"
+status.Size = UDim2.new(1, -12, 0, 20)
+status.Position = UDim2.new(0, 6, 0, 34)
+status.BackgroundTransparency = 1
+status.Text = "Status: " .. (DP_Config.Enabled and "ON" or "OFF")
+status.TextColor3 = DP_Config.Enabled and Color3.fromRGB(120,255,140) or Color3.fromRGB(255,120,120)
+status.TextXAlignment = Enum.TextXAlignment.Left
+status.Font = Enum.Font.Gotham
+status.TextSize = 13
+status.Parent = frame
 
-    local bg = Instance.new("BodyAngularVelocity")
-    bg.MaxTorque = Vector3.new(5e5, 5e5, 5e5)
-    bg.AngularVelocity = Vector3.new(math.random(-10,10), math.random(-10,10), math.random(-10,10))
-    bg.Parent = clone
-    Debris:AddItem(bg, 1.0)
+-- Toggle button
+local btn = Instance.new("TextButton")
+btn.Name = "ToggleBtn"
+btn.Size = UDim2.new(1, -12, 0, 34)
+btn.Position = UDim2.new(0, 6, 0, 60)
+btn.BackgroundColor3 = DP_Config.Enabled and Color3.fromRGB(34,139,34) or Color3.fromRGB(180,20,20)
+btn.TextColor3 = Color3.fromRGB(255,255,255)
+btn.Font = Enum.Font.GothamSemibold
+btn.TextSize = 16
+btn.Text = DP_Config.Enabled and "Disable Protection" or "Enable Protection"
+btn.Parent = frame
+btn.AutoButtonColor = true
+btn.BorderSizePixel = 0
+btn.ClipsDescendants = true
+btn.LayoutOrder = 1
 
-    if clone:IsA("BasePart") then
-        clone.Material = Enum.Material.Neon
-        clone.CastShadow = false
-    end
+-- Small help label
+local help = Instance.new("TextLabel")
+help.Name = "Help"
+help.Size = UDim2.new(1, -12, 0, 12)
+help.Position = UDim2.new(0, 6, 1, -18)
+help.BackgroundTransparency = 1
+help.Text = "Toggle applies immediately. Simulate down / set health to test."
+help.TextColor3 = Color3.fromRGB(190,190,190)
+help.TextXAlignment = Enum.TextXAlignment.Left
+help.Font = Enum.Font.Gotham
+help.TextSize = 11
+help.Parent = frame
 
-    return clone
+-- Utility to update UI visuals
+local function updateUI()
+    status.Text = "Status: " .. (DP_Config.Enabled and "ON" or "OFF")
+    status.TextColor3 = DP_Config.Enabled and Color3.fromRGB(120,255,140) or Color3.fromRGB(255,120,120)
+    btn.BackgroundColor3 = DP_Config.Enabled and Color3.fromRGB(34,139,34) or Color3.fromRGB(180,20,20)
+    btn.Text = DP_Config.Enabled and "Disable Protection" or "Enable Protection"
 end
 
--- separateModel: clone parts, hide originals, start pulsate if enabled
-local function separateModel(character)
-    if state.isSeparated then return end
-    if not character then return end
-
-    state.separatedParts = {}
-    for _, v in ipairs(character:GetChildren()) do
-        if isBasePart(v) then
-            -- hide original
-            v.Transparency = 1
-            v.CanCollide = false
-            v.Anchored = false
-
-            local clone = createCloneForPart(v)
-            state.separatedParts[v] = { orig = v, clone = clone, baseSize = clone.Size }
+-- Toggle action: set config, call attach/restore appropriately
+local function setEnabled(enabled)
+    DP_Config.Enabled = enabled
+    -- If enabling and player currently downed or low health -> apply immediately
+    local hum = lp.Character and lp.Character:FindFirstChildWhichIsA("Humanoid")
+    if enabled then
+        if hum then
+            local downed = false
+            pcall(function() downed = hum:GetAttribute and hum:GetAttribute("HasBeenDowned") end)
+            if downed or (hum.Health and hum.Health <= (DP_Config.HealthTrigger or 30)) then
+                pcall(function() separateModel(hum.Parent) end)
+                if DP_Config.AntiKillEnabled then pcall(function() attachAntiKill(hum) end) end
+            end
         end
+    else
+        -- disabling: restore visuals and detach anti-kill
+        pcall(function() restoreModel() end)
+        local hum2 = lp.Character and lp.Character:FindFirstChildWhichIsA("Humanoid")
+        if hum2 then pcall(function() detachAntiKill(hum2) end) end
     end
+    updateUI()
+end
 
-    -- Continuous pulsate & orbit if enabled
-    if Config.Pulsate then
-        if state.separateConn then
-            pcall(function() state.separateConn:Disconnect() end)
-            state.separateConn = nil
-        end
-        local startT = tick()
-        state.separateConn = RunService.Heartbeat:Connect(function()
-            local t = (tick() - startT) * Config.PulsateSpeed
-            for _, entry in pairs(state.separatedParts) do
-                local clone = entry.clone
-                local orig = entry.orig
-                if clone and clone.Parent and orig and orig.Parent then
-                    local pulse = 1 + math.sin(t) * Config.PulsateMagnitude
-                    clone.Size = Vector3.new(entry.baseSize.X, entry.baseSize.Y * pulse, entry.baseSize.Z)
-                    local bob = Vector3.new(0, math.sin(t * 1.2) * (Config.PulsateMagnitude * 0.2), 0)
-                    local orbit = Vector3.new(math.sin(t * 0.6) * 0.5, 0, math.cos(t * 0.6) * 0.5)
-                    local target = orig.CFrame * CFrame.new(orbit + bob)
-                    clone.CFrame = clone.CFrame:Lerp(target, 0.18)
-                end
+-- Button click
+btn.MouseButton1Click:Connect(function()
+    setEnabled(not DP_Config.Enabled)
+end)
+
+-- Allow draggable frame
+local dragging, dragInput, dragStart, startPos
+frame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = frame.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
             end
         end)
     end
-
-    state.isSeparated = true
-end
-
--- restoreModel: destroy clones, reset originals, stop pulsate
-local function restoreModel()
-    if state.separateConn then
-        pcall(function() state.separateConn:Disconnect() end)
-        state.separateConn = nil
+end)
+frame.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        dragInput = input
     end
-
-    for orig, entry in pairs(state.separatedParts) do
-        if entry.clone and entry.clone.Parent then
-            entry.clone:Destroy()
-        end
-        if orig and orig.Parent then
-            orig.Transparency = 0
-            orig.CanCollide = true
-            orig.Anchored = false
-        end
+end)
+RunService.Heartbeat:Connect(function()
+    if dragging and dragInput then
+        local delta = dragInput.Position - dragStart
+        frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
     end
+end)
 
-    state.separatedParts = {}
-    state.isSeparated = false
-end
-
--- Anti-kill: attach handlers to humanoid to clamp health and try revive
-local function attachAntiKill(hum)
-    if not hum or not hum.Parent then return end
-    if state.antiKillConns[hum] then return end
-
-    local conns = {}
-
-    conns.healthConn = hum.HealthChanged:Connect(function(newHealth)
-        if not Config.AntiKillEnabled then return end
-        if not hum.GetAttribute then return end
-        local downed = hum:GetAttribute("HasBeenDowned")
-        if downed and newHealth <= Config.ProtectHealth then
-            -- temporarily boost MaxHealth then set Health to ProtectHealth
-            local ok, prevMax = pcall(function() return hum.MaxHealth end)
-            if ok and prevMax then
-                pcall(function() hum.MaxHealth = Config.MaxHealthOverride end)
-                pcall(function() hum.Health = math.max(Config.ProtectHealth, 1) end)
-                task.spawn(function()
-                    task.wait(0.12)
-                    pcall(function() hum.MaxHealth = prevMax end)
-                end)
-            else
-                pcall(function() hum.Health = math.max(Config.ProtectHealth, 1) end)
-            end
-        end
-    end)
-
-    conns.diedConn = hum.Died:Connect(function()
-        if not Config.AntiKillEnabled then return end
-        if not hum.GetAttribute then return end
-        local wasDowned = hum:GetAttribute("HasBeenDowned")
-        if wasDowned and Config.AutoRevive then
-            task.wait(Config.ReviveDelay)
-            if hum and hum.Parent then
-                pcall(function()
-                    hum.Health = math.max(Config.ProtectHealth, 1)
-                    hum:SetAttribute("IsDead", false)
-                    local hrp = hum.Parent:FindFirstChild("HumanoidRootPart")
-                    if hrp then
-                        hrp.CFrame = hrp.CFrame + Vector3.new(0, 2.5, 0)
-                    end
-                end)
-            end
-        end
-    end)
-
-    state.antiKillConns[hum] = conns
-end
-
-local function detachAntiKill(hum)
-    local conns = state.antiKillConns[hum]
-    if not conns then return end
-    pcall(function()
-        if conns.healthConn then conns.healthConn:Disconnect() end
-        if conns.diedConn then conns.diedConn:Disconnect() end
-    end)
-    state.antiKillConns[hum] = nil
-end
-
--- Monitor the local player's humanoid attributes to apply/restore when downed
-local function hookLocalHumanoid(hum)
-    if not hum then return end
-
-    -- ensure we attach anti-kill when needed immediately
-    if hum:GetAttribute and hum:GetAttribute("HasBeenDowned") and Config.Enabled and Config.AntiKillEnabled then
-        attachAntiKill(hum)
+-- Hotkey (optional): press RightShift to toggle
+local UserInputService = game:GetService("UserInputService")
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.KeyCode == Enum.KeyCode.RightShift then
+        setEnabled(not DP_Config.Enabled)
     end
+end)
 
-    -- attribute change watcher
-    local attrConn
-    attrConn = hum.AttributeChanged:Connect(function(attr)
-        if attr == "HasBeenDowned" then
-            local downed = hum:GetAttribute("HasBeenDowned")
-            if downed and Config.Enabled then
-                -- apply both visual and anti-kill
-                separateModel(hum.Parent)
-                if Config.AntiKillEnabled then attachAntiKill(hum) end
-            else
-                -- restore both
-                restoreModel()
-                if Config.AntiKillEnabled then detachAntiKill(hum) end
-            end
-        elseif attr == "IsDead" then
-            -- if marked not dead but separated, keep state (no-op)
-        end
-    end)
-
-    -- also store attrConn to clean later if humanoid replaced
-    state.antiKillConns[hum] = state.antiKillConns[hum] or {}
-    state.antiKillConns[hum].attrConn = attrConn
-end
-
--- Monitor character added / current character
-local function monitorPlayer()
-    if not lp then return end
-    local function onCharAdded(char)
-        local hum = char:FindFirstChildWhichIsA("Humanoid")
-        if hum then
-            hookLocalHumanoid(hum)
-            -- If currently downed and feature enabled, trigger immediately
-            if hum:GetAttribute and hum:GetAttribute("HasBeenDowned") and Config.Enabled then
-                separateModel(char)
-                if Config.AntiKillEnabled then attachAntiKill(hum) end
-            end
-        end
+-- Keep UI in sync if other scripts change DP_Config.Enabled
+RunService.Heartbeat:Connect(function()
+    if DP_Config.Enabled ~= (status.Text:match("ON") and true or false) then
+        updateUI()
     end
-    if lp.Character then onCharAdded(lp.Character) end
-    lp.CharacterAdded:Connect(onCharAdded)
-end
+end)
 
-monitorPlayer()
+-- Initial UI update
+updateUI()
 
--- GUI: single toggle that controls everything
-local function setupGUI(Window)
-    if not Window then
-        -- try to require WindUI loader commonly used in this project
-        local ok, WindUI = pcall(function() return require("./src/Init") end)
-        if ok and WindUI then
-            Window = WindUI:CreateWindow({Title="Downed Protect", Author="script", Folder="downprotect"})
-        end
-    end
-    if not Window then return end
-
-    local Tab = Window:Tab({Title = "Downed", Icon = "shield"})
-
-    Tab:Toggle({
-        Title = "Enable Downed Protection (เนเธขเธ+เธเนเธญเธเธเธฑเธ)",
-        Default = Config.Enabled,
-        Callback = function(v)
-            Config.Enabled = v
-            Window:Notify({Title = "Downed Protection", Description = v and "เน€เธเธดเธ”" or "เธเธดเธ”", Duration = 1.6})
-            -- If disabling, immediately restore/cleanup if currently separated/attached
-            if not v then
-                restoreModel()
-                for hum, _ in pairs(state.antiKillConns) do
-                    -- only detach if it's a humanoid entry (attrConn might exist)
-                    if hum and hum:IsA and hum:IsA("Humanoid") then
-                        detachAntiKill(hum)
-                    end
-                end
-            else
-                -- if enabling and player already downed, apply immediately
-                local char = lp.Character
-                if char and char:FindFirstChild("Humanoid") then
-                    local hum = char:FindFirstChild("Humanoid")
-                    if hum and hum:GetAttribute and hum:GetAttribute("HasBeenDowned") then
-                        separateModel(char)
-                        if Config.AntiKillEnabled then attachAntiKill(hum) end
-                    end
-                end
-            end
-        end
-    })
-
-    Tab:Slider({
-        Title = "Stretch Amount",
-        Step = 0.1,
-        Value = {Min = 1.0, Max = 8.0, Default = Config.StretchAmount},
-        Callback = function(v)
-            Config.StretchAmount = tonumber(v)
-        end
-    })
-
-    Tab:Slider({
-        Title = "Spread Radius",
-        Step = 1,
-        Value = {Min = 0, Max = 60, Default = Config.SpreadRadius},
-        Callback = function(v)
-            Config.SpreadRadius = tonumber(v)
-        end
-    })
-
-    Tab:Toggle({
-        Title = "Enable AntiKill",
-        Default = Config.AntiKillEnabled,
-        Callback = function(v)
-            Config.AntiKillEnabled = v
-            if not v then
-                -- detach all anti-kill handlers immediately
-                for hum, _ in pairs(state.antiKillConns) do
-                    if hum and hum:IsA and hum:IsA("Humanoid") then
-                        detachAntiKill(hum)
-                    end
-                end
-            end
-        end
-    })
-
-    Tab:Slider({
-        Title = "Protect Health",
-        Step = 1,
-        Value = {Min = 1, Max = 50, Default = Config.ProtectHealth},
-        Callback = function(v)
-            Config.ProtectHealth = tonumber(v)
-        end
-    })
-
-    Tab:Toggle({
-        Title = "Auto Revive",
-        Default = Config.AutoRevive,
-        Callback = function(v)
-            Config.AutoRevive = v
-        end
-    })
-
-    Tab:Button({
-        Title = "Restore Now",
-        Callback = function()
-            restoreModel()
-            -- detach humanoid anti-kill handlers
-            for hum, _ in pairs(state.antiKillConns) do
-                if hum and hum:IsA and hum:IsA("Humanoid") then
-                    detachAntiKill(hum)
-                end
-            end
-            Window:Notify({Title = "Restore", Description = "เธเธทเธเธชเธ เธฒเธเนเธกเน€เธ”เธฅเนเธฅเธฐเธ–เธญเธ”เธเธฒเธฃเธเนเธญเธเธเธฑเธเนเธฅเนเธง", Duration = 1.6})
-        end
-    })
-end
-
--- try to attach GUI to global Window if present
-safeCall(function() setupGUI(rawget(_G, "Window") or rawget(script, "Window")) end)
-
--- Return API in case other scripts want to control programmatically
-return {
-    Config = Config,
-    separateModel = separateModel,
-    restoreModel = restoreModel,
-    attachAntiKill = attachAntiKill,
-    detachAntiKill = detachAntiKill,
-}
+-- End of simple GUI
