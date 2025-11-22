@@ -1,529 +1,390 @@
--- WindUI config/boot --
-local WindUI
-do
-    local ok, result = pcall(function()
-        return require("./src/Init")
-    end)
-    if ok then
-        WindUI = result
-    else
-        WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/refs/heads/main/dist/main.lua"))()
-    end
-end
-
-local Window = WindUI:CreateWindow({
-    Title = "mo hub",
-    Author = "mo hub",
-    Folder = "ftgshub",
-    Icon = "computer",
-    NewElements = true,
-    HideSearchBar = false,
-    OpenButton = {
-        Title = "mo hub",
-        CornerRadius = UDim.new(1,0),
-        StrokeThickness = 3,
-        Enabled = true,
-        Draggable = true,
-        OnlyMobile = false,
-        Color = ColorSequence.new(Color3.fromHex("#30FF6A"), Color3.fromHex("#e7ff2f"))
-    }
-})
-
-local CombatTab = Window:Tab({Title = "Combat", Icon = "sword"})
-local ESPTab = Window:Tab({Title = "ESP", Icon = "eye"})
-local AntiAimTab = Window:Tab({Title = "AntiAim", Icon = "arrow-left-right"})
-
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Debris = game:GetService("Debris")
-local LocalPlayer = Players.LocalPlayer
-local Camera = workspace.CurrentCamera
+local TweenService = game:GetService("TweenService")
 
--------------------------------------------------
--- AntiAim TAB & โค้ด (Toggle เปิด/ปิด)
--------------------------------------------------
-local aaEnabled = false
-local aaRadius = 14
-local aaSpeed = 0.085
-local velocityPower = 5000
-local hrp
-local aaConn
+local lp = Players.LocalPlayer
 
-AntiAimTab:Toggle({
-    Title = "AntiAim",
-    Default = false,
-    Callback = function(state)
-        aaEnabled = state
-        if state then
-            WindUI:Notify({Title = "✅ AntiAim เปิด!", Description = "คุณส่าย HRP+สุ่ม Velocity", Duration = 2.5})
-            if aaConn then aaConn:Disconnect() end
-            aaConn = RunService.RenderStepped:Connect(function()
-                hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-                if not hrp then return end
-                -- เฉพาะตอน AntiAim เปิดเท่านั้น!
-                if aaEnabled then
-                    local tickTime = tick()
-                    local offsetX = math.cos(tickTime * 85) * aaRadius
-                    local offsetZ = math.sin(tickTime * 120) * aaRadius
-                    local centerY = hrp.Position.Y
-                    hrp.CFrame = CFrame.new(hrp.Position.X + offsetX, centerY, hrp.Position.Z + offsetZ)
-                    hrp.Velocity = Vector3.new(math.random(-velocityPower, velocityPower), math.random(-20,20), math.random(-velocityPower, velocityPower))
-                end
-            end)
-        else
-            WindUI:Notify({Title = "🔻 AntiAim ปิด", Description = "โหมดกลับปกติ", Duration = 2})
-            if aaConn then aaConn:Disconnect() aaConn = nil end
-            hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-            if hrp then hrp.Velocity = Vector3.new(0,0,0) end
-        end
-    end
-})
+-- persistent globals (safe across script reloads)
+_G._downedProtect = _G._downedProtect or {}
+local state = _G._downedProtect
 
-AntiAimTab:Button({
-    Title = "แจ้งว่าทำงานไหม AntiAim",
-    Callback = function()
-        if aaEnabled then
-            WindUI:Notify({Title = "AntiAim: กำลังทำงาน!", Description = "HRP กำลังส่ายสุด/หลอก Velocity", Duration = 2})
-        else
-            WindUI:Notify({Title = "AntiAim: ปิดอยู่!", Description = "กดเปิด AntiAim Tab เพื่อเริ่ม", Duration = 2})
-        end
-    end
-})
+state.separatedParts = state.separatedParts or {}       -- map origPart -> {orig, clone, baseSize}
+state.isSeparated = state.isSeparated or false
+state.separateConn = state.separateConn or nil
+state.antiKillConns = state.antiKillConns or {}         -- map humanoid -> conns
 
--- HookMetamethod: UI/ESP ของเรายังเห็นตำแหน่งปกติ
-local mt = getrawmetatable(game)
-setreadonly(mt, false)
-local old_index = mt.__index
-mt.__index = function(obj, key)
-    if aaEnabled and obj == hrp and key == "Position" and Players:GetPlayerFromCharacter(obj.Parent) == LocalPlayer then
-        local pos = hrp.Position
-        return Vector3.new(math.floor(pos.X / aaRadius) * aaRadius, pos.Y, math.floor(pos.Z / aaRadius) * aaRadius)
-    end
-    return old_index(obj, key)
-end
-setreadonly(mt, true)
-
-
--------------------------------------------------
--- Silent Aim System (Per-player full system)
--- เอา ShootDirect ออก และรวมการคำนวณทั้งหมดในระบบผู้เล่น
--------------------------------------------------
-local SilentAimEnabled = false
-local BASE_PREDICTION = 0.14
-local FOVCircle = Drawing.new("Circle")
-FOVCircle.Radius = 120
-FOVCircle.Thickness = 2
-FOVCircle.Filled = false
-FOVCircle.Color = Color3.fromRGB(255,255,0)
-FOVCircle.Visible = false
-local showFov = false
-
-local TracerLine = Drawing.new("Line")
-TracerLine.Color = Color3.fromRGB(0,255,255)
-TracerLine.Thickness = 2
-TracerLine.Visible = false
-local showTracer = true
-local tracerColor = Color3.fromRGB(255,120,120)
-
--- AimSystem: per-player tracking and utilities
-local AimSystem = {
-    players = {}, -- [userId] = {lastPos = Vector3, lastTime = number, velBuf = {}, bufSize = 7}
-    antiaimThreshold = 3.5,
-    bufSize = 7,
-    basePrediction = BASE_PREDICTION
+-- Master config controlled by a single GUI toggle
+local Config = {
+    Enabled = false,           -- master switch (single GUI toggle)
+    -- visual/separate settings
+    StretchAmount = 2.8,
+    SpreadRadius = 18,
+    Pulsate = true,
+    PulsateMagnitude = 0.28,
+    PulsateSpeed = 2.4,
+    -- anti-kill settings
+    AntiKillEnabled = true,
+    ProtectHealth = 2,
+    AutoRevive = true,
+    MaxHealthOverride = 10000,
+    ReviveDelay = 0.08,
 }
 
-function AimSystem:Ensure(p)
-    if not p then return end
-    local id = p.UserId
-    if not self.players[id] then
-        self.players[id] = {
-            lastHeadPos = nil,
-            lastTime = nil,
-            velBuf = {}
-        }
+-- Utilities
+local function safeCall(fn, ...)
+    local ok, res = pcall(fn, ...)
+    return ok, res
+end
+
+local function isBasePart(obj)
+    return obj and obj:IsA and obj:IsA("BasePart")
+end
+
+-- Create clone for a base part using Config values
+local function createCloneForPart(part)
+    local stretch = Config.StretchAmount
+    local spread = Config.SpreadRadius
+
+    local clone = part:Clone()
+    clone.Name = part.Name .. "_downed_clone"
+    clone.Parent = workspace
+    clone.CanCollide = false
+    clone.Anchored = false
+    clone.Transparency = 0
+    clone.Size = Vector3.new(
+        math.max(0.05, part.Size.X * (1 + (stretch - 1) * 0.28)),
+        math.max(0.05, part.Size.Y * stretch),
+        math.max(0.05, part.Size.Z * (1 + (stretch - 1) * 0.28))
+    )
+
+    -- random offset direction & initial placement
+    local rx = (math.random() - 0.5)
+    local ry = (math.random() * 0.8) - 0.4
+    local rz = (math.random() - 0.5)
+    local dir = Vector3.new(rx, ry, rz)
+    if dir.Magnitude == 0 then dir = Vector3.new(0.1, 0, 0) end
+    dir = dir.Unit
+    local offset = dir * (math.random() * spread)
+    clone.CFrame = part.CFrame * CFrame.new(offset)
+
+    -- body velocity for outward push (temporary)
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+    bv.Velocity = dir * (25 * math.clamp(stretch, 1, 6)) + Vector3.new(0, -12, 0)
+    bv.P = 3000
+    bv.Parent = clone
+    Debris:AddItem(bv, 0.9)
+
+    local bg = Instance.new("BodyAngularVelocity")
+    bg.MaxTorque = Vector3.new(5e5, 5e5, 5e5)
+    bg.AngularVelocity = Vector3.new(math.random(-10,10), math.random(-10,10), math.random(-10,10))
+    bg.Parent = clone
+    Debris:AddItem(bg, 1.0)
+
+    if clone:IsA("BasePart") then
+        clone.Material = Enum.Material.Neon
+        clone.CastShadow = false
     end
-    return self.players[id]
+
+    return clone
 end
 
-function AimSystem:UpdatePlayerVelocity(p)
-    if not (p and p.Character and p.Character:FindFirstChild("Head")) then return Vector3.new(0,0,0) end
-    local data = self:Ensure(p)
-    local head = p.Character.Head
-    local now = tick()
-    if data.lastHeadPos == nil or data.lastTime == nil or data.lastHeadPos == Vector3.new(0,0,0) then
-        data.lastHeadPos = head.Position
-        data.lastTime = now
-        data.velBuf = {}
-        return Vector3.new(0,0,0)
+-- separateModel: clone parts, hide originals, start pulsate if enabled
+local function separateModel(character)
+    if state.isSeparated then return end
+    if not character then return end
+
+    state.separatedParts = {}
+    for _, v in ipairs(character:GetChildren()) do
+        if isBasePart(v) then
+            -- hide original
+            v.Transparency = 1
+            v.CanCollide = false
+            v.Anchored = false
+
+            local clone = createCloneForPart(v)
+            state.separatedParts[v] = { orig = v, clone = clone, baseSize = clone.Size }
+        end
     end
-    local dt = now - data.lastTime
-    data.lastTime = now
-    if dt <= 0 then return Vector3.new(0,0,0) end
-    local vel = (head.Position - data.lastHeadPos) / dt
-    data.lastHeadPos = head.Position
-    table.insert(data.velBuf, vel.Magnitude)
-    if #data.velBuf > self.bufSize then table.remove(data.velBuf, 1) end
-    return vel
-end
 
-function AimSystem:IsAntiAiming(p)
-    if not (p and p.UserId) then return false end
-    local data = self.players[p.UserId]
-    if not data or #data.velBuf < 3 then return false end
-    local sum = 0
-    for _,v in ipairs(data.velBuf) do sum = sum + v end
-    local avg = sum / #data.velBuf
-    return avg > self.antiaimThreshold
-end
-
-function AimSystem:GetPredictedPositionForHead(p, predictionTime)
-    predictionTime = predictionTime or self.basePrediction
-    if not (p and p.Character and p.Character:FindFirstChild("Head")) then return nil end
-    local head = p.Character.Head
-    local vel = self:UpdatePlayerVelocity(p)
-    return head.Position + vel * predictionTime, head
-end
-
-function AimSystem:GetPredictedPositionForHRP(p, predictionTime)
-    predictionTime = predictionTime or self.basePrediction
-    if not (p and p.Character and p.Character:FindFirstChild("HumanoidRootPart")) then return nil end
-    local hrp = p.Character.HumanoidRootPart
-    return hrp.Position + hrp.Velocity * predictionTime, hrp
-end
-
-function AimSystem:GetBestTargetInFOV()
-    local closest, shortest = nil, math.huge
-    local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-    if not myHead then return nil end
-    for _,plr in pairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("Head") then
-            local head = plr.Character.Head
-            local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
-            local distFov = (Vector2.new(screenPos.X,screenPos.Y) - Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)).Magnitude
-            local distWorld = (head.Position - myHead.Position).Magnitude
-            if onScreen and distFov <= FOVCircle.Radius then
-                if distWorld < shortest then
-                    shortest = distWorld
-                    closest = plr
+    -- Continuous pulsate & orbit if enabled
+    if Config.Pulsate then
+        if state.separateConn then
+            pcall(function() state.separateConn:Disconnect() end)
+            state.separateConn = nil
+        end
+        local startT = tick()
+        state.separateConn = RunService.Heartbeat:Connect(function()
+            local t = (tick() - startT) * Config.PulsateSpeed
+            for _, entry in pairs(state.separatedParts) do
+                local clone = entry.clone
+                local orig = entry.orig
+                if clone and clone.Parent and orig and orig.Parent then
+                    local pulse = 1 + math.sin(t) * Config.PulsateMagnitude
+                    clone.Size = Vector3.new(entry.baseSize.X, entry.baseSize.Y * pulse, entry.baseSize.Z)
+                    local bob = Vector3.new(0, math.sin(t * 1.2) * (Config.PulsateMagnitude * 0.2), 0)
+                    local orbit = Vector3.new(math.sin(t * 0.6) * 0.5, 0, math.cos(t * 0.6) * 0.5)
+                    local target = orig.CFrame * CFrame.new(orbit + bob)
+                    clone.CFrame = clone.CFrame:Lerp(target, 0.18)
                 end
             end
-        end
+        end)
     end
-    return closest
+
+    state.isSeparated = true
 end
 
--- WallCheck unchanged
-local function WallCheck(startPos, endPos)
-    local dir = (endPos - startPos).Unit
-    local dist = (endPos - startPos).Magnitude
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {LocalPlayer.Character}
-    local result = workspace:Raycast(startPos, dir * dist, params)
-    if result and result.Instance then
-        if not result.Instance:IsDescendantOf(LocalPlayer.Character)
-            and not (result.Instance.Name:find("Head") or result.Instance.Name:find("HumanoidRootPart"))
-        then
-            return true -- เจอสิ่งกีดขวาง/กำแพง
+-- restoreModel: destroy clones, reset originals, stop pulsate
+local function restoreModel()
+    if state.separateConn then
+        pcall(function() state.separateConn:Disconnect() end)
+        state.separateConn = nil
+    end
+
+    for orig, entry in pairs(state.separatedParts) do
+        if entry.clone and entry.clone.Parent then
+            entry.clone:Destroy()
+        end
+        if orig and orig.Parent then
+            orig.Transparency = 0
+            orig.CanCollide = true
+            orig.Anchored = false
         end
     end
-    return false
+
+    state.separatedParts = {}
+    state.isSeparated = false
 end
 
--- Visual effects (laser, bullet) - uses predicted aimPos now
-local function FireLaserEffect(fromPos, toPos, color, width, duration)
-    local laser = Instance.new("Part")
-    laser.Anchored = true
-    laser.CanCollide = false
-    laser.Material = Enum.Material.Neon
-    laser.Color = color or Color3.fromRGB(0,255,0)
-    local dist = (toPos-fromPos).Magnitude
-    laser.Size = Vector3.new(width or 0.16, width or 0.16, dist)
-    laser.CFrame = CFrame.new(fromPos, toPos) * CFrame.new(0, 0, -dist/2)
-    laser.Parent = workspace
-    Debris:AddItem(laser, duration or 0.22)
-end
+-- Anti-kill: attach handlers to humanoid to clamp health and try revive
+local function attachAntiKill(hum)
+    if not hum or not hum.Parent then return end
+    if state.antiKillConns[hum] then return end
 
--- UI: SilentAim, FOV, prediction, antiaim settings, tracer settings
-CombatTab:Toggle({
-    Title = "Enable Silent Aim (Auto Detect)",
-    Default = false,
-    Callback = function(v)
-        SilentAimEnabled = v
-        TracerLine.Visible = v and TracerLine.Visible and showTracer
-    end
-})
+    local conns = {}
 
-CombatTab:Toggle({
-    Title = "Show FOV Circle",
-    Default = false,
-    Callback = function(v)
-        showFov = v
-        FOVCircle.Visible = v
-    end
-})
-
-CombatTab:Slider({
-    Title = "FOV Radius",
-    Step = 1,
-    Value = {Min = 50, Max = 500, Default = FOVCircle.Radius},
-    Callback = function(v)
-        FOVCircle.Radius = tonumber(v)
-    end
-})
-
-CombatTab:Slider({
-    Title = "Base Prediction (ms fraction)",
-    Step = 0.01,
-    Value = {Min = 0.00, Max = 0.5, Default = AimSystem.basePrediction},
-    Callback = function(v)
-        AimSystem.basePrediction = tonumber(v)
-        BASE_PREDICTION = AimSystem.basePrediction
-    end
-})
-
-CombatTab:Slider({
-    Title = "Antiaim Threshold",
-    Step = 0.1,
-    Value = {Min = 0.5, Max = 10, Default = AimSystem.antiaimThreshold},
-    Callback = function(v)
-        AimSystem.antiaimThreshold = tonumber(v)
-    end
-})
-
-CombatTab:Slider({
-    Title = "Velocity Memory Size",
-    Step = 1,
-    Value = {Min = 3, Max = 20, Default = AimSystem.bufSize},
-    Callback = function(v)
-        AimSystem.bufSize = tonumber(v)
-    end
-})
-
-CombatTab:Toggle({
-    Title = "Show Tracer",
-    Default = true,
-    Callback = function(v)
-        showTracer = v
-        TracerLine.Visible = SilentAimEnabled and v
-    end
-})
-
-CombatTab:ColorPicker({
-    Title = "Tracer Color",
-    Default = tracerColor,
-    Callback = function(col)
-        tracerColor = col
-    end
-})
-
--- Hook send.FireServer to modify bullet aim using AimSystem results
-local send = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Send")
-local oldFire
-oldFire = hookfunction(send.FireServer,function(self,...)
-    local args = {...}
-    if SilentAimEnabled then
-        local target = AimSystem:GetBestTargetInFOV()
-        if target and target.Character then
-            local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-            if not myHead then return oldFire(self,unpack(args)) end
-
-            -- Determine whether target is anti-aiming
-            local useHRP = false
-            if AimSystem:IsAntiAiming(target) then
-                useHRP = true
-            end
-
-            local aimPos, part = nil, nil
-            if useHRP and target.Character:FindFirstChild("HumanoidRootPart") then
-                aimPos, part = AimSystem:GetPredictedPositionForHRP(target, AimSystem.basePrediction)
-            elseif target.Character:FindFirstChild("Head") then
-                aimPos, part = AimSystem:GetPredictedPositionForHead(target, AimSystem.basePrediction)
-            end
-
-            if aimPos and part then
-                local wall = WallCheck(myHead.Position, aimPos)
-                if wall then
-                    args[4] = CFrame.new(math.huge,math.huge,math.huge)
-                    args[5] = {[1] = {[1] = {["Instance"]=part,["Position"]=aimPos}}}
-                else
-                    args[4] = CFrame.new(aimPos)
-                    args[5] = {[1] = {[1] = {["Instance"]=part,["Position"]=aimPos}}}
-                end
-                -- Visual effects
-                if showTracer then
-                    FireLaserEffect(myHead.Position, aimPos, tracerColor, 0.17, 0.18)
-                    local dist = (aimPos-myHead.Position).Magnitude
-                    local bullet = Instance.new("Part")
-                    bullet.Anchored = true
-                    bullet.CanCollide = false
-                    bullet.Material = Enum.Material.Neon
-                    bullet.Size = Vector3.new(0.1,0.1,dist)
-                    bullet.CFrame = CFrame.new(myHead.Position,aimPos)*CFrame.new(0,0,-dist/2)
-                    bullet.Color = tracerColor
-                    bullet.Parent = workspace
-                    Debris:AddItem(bullet,2.7)
-                end
-            end
-        end
-    end
-    return oldFire(self,unpack(args))
-end)
-
--- Update Tracer + FOV circle each frame and maintain AimSystem velocity updates for all players
-RunService.RenderStepped:Connect(function()
-    FOVCircle.Position = Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)
-
-    -- Update velocities for players we track (keeps antiaim detection running)
-    for _,plr in pairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("Head") then
-            AimSystem:UpdatePlayerVelocity(plr)
-        end
-    end
-
-    local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-    local target = AimSystem:GetBestTargetInFOV()
-    local part = nil
-    if target then
-        if AimSystem:IsAntiAiming(target) then
-            part = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
-        else
-            part = target.Character and target.Character:FindFirstChild("Head")
-        end
-    end
-    if SilentAimEnabled and myHead and part then
-        local my2D = Vector2.new(Camera:WorldToViewportPoint(myHead.Position).X,Camera:WorldToViewportPoint(myHead.Position).Y)
-        local t2D = Vector2.new(Camera:WorldToViewportPoint(part.Position).X, Camera:WorldToViewportPoint(part.Position).Y)
-        local distFromCenter = (t2D - Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)).Magnitude
-        if not showFov or distFromCenter<=FOVCircle.Radius then
-            TracerLine.From = my2D
-            TracerLine.To = t2D
-            TracerLine.Color = tracerColor
-            TracerLine.Visible = showTracer
-        else
-            TracerLine.Visible = false
-        end
-    else
-        TracerLine.Visible = false
-    end
-end)
-
--------------------------------------------------
--- ESP ของเดิม
--------------------------------------------------
-local boxESPEnabled = false
-local nameESPEnabled = false
-local espPlayers = {}
-
-ESPTab:Toggle({
-    Title = "Box ESP",
-    Default = false,
-    Callback = function(state)
-        boxESPEnabled = state
-    end
-})
-
-ESPTab:Toggle({
-    Title = "Name ESP",
-    Default = false,
-    Callback = function(state)
-        nameESPEnabled = state
-    end
-})
-
-local function createESP(player)
-    local lines = {
-        top = Drawing.new("Line"),
-        bottom = Drawing.new("Line"),
-        left = Drawing.new("Line"),
-        right = Drawing.new("Line"),
-    }
-    local nameText = Drawing.new("Text")
-    nameText.Size = 16
-    nameText.Center = true
-    nameText.Outline = true
-    nameText.Color = Color3.fromRGB(255, 0, 0)
-    nameText.Visible = false
-    for _, line in pairs(lines) do
-        line.Color = Color3.new(1, 1, 1)
-        line.Thickness = 1
-        line.Visible = false
-    end
-    local drawings = {lines.top, lines.bottom, lines.left, lines.right, nameText}
-    local conn = RunService.RenderStepped:Connect(function()
-        if not player.Character or not player.Character:FindFirstChild("Head") or not player.Character:FindFirstChild("HumanoidRootPart") then
-            for _, line in pairs(lines) do line.Visible = false end
-            nameText.Visible = false
-            return
-        end
-        local head = player.Character.Head
-        local hrp = player.Character.HumanoidRootPart
-        local topWorld = head.Position + Vector3.new(0, 1, 0)
-        local bottomWorld = hrp.Position - Vector3.new(0, 3.5, 0)
-        local top, onTop = Camera:WorldToViewportPoint(topWorld)
-        local bottom, onBottom = Camera:WorldToViewportPoint(bottomWorld)
-        if onTop and onBottom and top.Z > 0 and bottom.Z > 0 then
-            local height = math.abs(top.Y - bottom.Y) * 1.2
-            local width = height / 1.5
-            local x = top.X - width / 2
-            local y = top.Y - height * 0.1
-            local tl = Vector2.new(x, y)
-            local tr = Vector2.new(x + width, y)
-            local bl = Vector2.new(x, y + height)
-            local br = Vector2.new(x + width, y + height)
-            if boxESPEnabled then
-                lines.top.From = tl
-                lines.top.To = tr
-                lines.bottom.From = bl
-                lines.bottom.To = br
-                lines.left.From = tl
-                lines.left.To = bl
-                lines.right.From = tr
-                lines.right.To = br
-                for _, line in pairs(lines) do line.Visible = true end
+    conns.healthConn = hum.HealthChanged:Connect(function(newHealth)
+        if not Config.AntiKillEnabled then return end
+        if not hum.GetAttribute then return end
+        local downed = hum:GetAttribute("HasBeenDowned")
+        if downed and newHealth <= Config.ProtectHealth then
+            -- temporarily boost MaxHealth then set Health to ProtectHealth
+            local ok, prevMax = pcall(function() return hum.MaxHealth end)
+            if ok and prevMax then
+                pcall(function() hum.MaxHealth = Config.MaxHealthOverride end)
+                pcall(function() hum.Health = math.max(Config.ProtectHealth, 1) end)
+                task.spawn(function()
+                    task.wait(0.12)
+                    pcall(function() hum.MaxHealth = prevMax end)
+                end)
             else
-                for _, line in pairs(lines) do line.Visible = false end
+                pcall(function() hum.Health = math.max(Config.ProtectHealth, 1) end)
             end
-            if nameESPEnabled then
-                nameText.Text = player.Name
-                nameText.Position = Vector2.new(top.X, y - 16)
-                nameText.Visible = true
-            else
-                nameText.Visible = false
-            end
-        else
-            for _, line in pairs(lines) do line.Visible = false end
-            nameText.Visible = false
         end
     end)
-    espPlayers[player] = {conn = conn, drawings = drawings}
+
+    conns.diedConn = hum.Died:Connect(function()
+        if not Config.AntiKillEnabled then return end
+        if not hum.GetAttribute then return end
+        local wasDowned = hum:GetAttribute("HasBeenDowned")
+        if wasDowned and Config.AutoRevive then
+            task.wait(Config.ReviveDelay)
+            if hum and hum.Parent then
+                pcall(function()
+                    hum.Health = math.max(Config.ProtectHealth, 1)
+                    hum:SetAttribute("IsDead", false)
+                    local hrp = hum.Parent:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        hrp.CFrame = hrp.CFrame + Vector3.new(0, 2.5, 0)
+                    end
+                end)
+            end
+        end
+    end)
+
+    state.antiKillConns[hum] = conns
 end
 
-local function loadESP()
-    for _, player in pairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            createESP(player)
+local function detachAntiKill(hum)
+    local conns = state.antiKillConns[hum]
+    if not conns then return end
+    pcall(function()
+        if conns.healthConn then conns.healthConn:Disconnect() end
+        if conns.diedConn then conns.diedConn:Disconnect() end
+    end)
+    state.antiKillConns[hum] = nil
+end
+
+-- Monitor the local player's humanoid attributes to apply/restore when downed
+local function hookLocalHumanoid(hum)
+    if not hum then return end
+
+    -- ensure we attach anti-kill when needed immediately
+    if hum:GetAttribute and hum:GetAttribute("HasBeenDowned") and Config.Enabled and Config.AntiKillEnabled then
+        attachAntiKill(hum)
+    end
+
+    -- attribute change watcher
+    local attrConn
+    attrConn = hum.AttributeChanged:Connect(function(attr)
+        if attr == "HasBeenDowned" then
+            local downed = hum:GetAttribute("HasBeenDowned")
+            if downed and Config.Enabled then
+                -- apply both visual and anti-kill
+                separateModel(hum.Parent)
+                if Config.AntiKillEnabled then attachAntiKill(hum) end
+            else
+                -- restore both
+                restoreModel()
+                if Config.AntiKillEnabled then detachAntiKill(hum) end
+            end
+        elseif attr == "IsDead" then
+            -- if marked not dead but separated, keep state (no-op)
+        end
+    end)
+
+    -- also store attrConn to clean later if humanoid replaced
+    state.antiKillConns[hum] = state.antiKillConns[hum] or {}
+    state.antiKillConns[hum].attrConn = attrConn
+end
+
+-- Monitor character added / current character
+local function monitorPlayer()
+    if not lp then return end
+    local function onCharAdded(char)
+        local hum = char:FindFirstChildWhichIsA("Humanoid")
+        if hum then
+            hookLocalHumanoid(hum)
+            -- If currently downed and feature enabled, trigger immediately
+            if hum:GetAttribute and hum:GetAttribute("HasBeenDowned") and Config.Enabled then
+                separateModel(char)
+                if Config.AntiKillEnabled then attachAntiKill(hum) end
+            end
         end
     end
-    Players.PlayerAdded:Connect(function(player)
-        if player ~= LocalPlayer then
-            player.CharacterAdded:Connect(function()
-                wait(0.1)
-                createESP(player)
-            end)
-        end
-    end)
-    Players.PlayerRemoving:Connect(function(player)
-        if espPlayers[player] then
-            espPlayers[player].conn:Disconnect()
-            for _, drawing in pairs(espPlayers[player].drawings) do
-                drawing:Remove()
-            end
-            espPlayers[player] = nil
-        end
-    end)
+    if lp.Character then onCharAdded(lp.Character) end
+    lp.CharacterAdded:Connect(onCharAdded)
 end
 
-loadESP()
+monitorPlayer()
+
+-- GUI: single toggle that controls everything
+local function setupGUI(Window)
+    if not Window then
+        -- try to require WindUI loader commonly used in this project
+        local ok, WindUI = pcall(function() return require("./src/Init") end)
+        if ok and WindUI then
+            Window = WindUI:CreateWindow({Title="Downed Protect", Author="script", Folder="downprotect"})
+        end
+    end
+    if not Window then return end
+
+    local Tab = Window:Tab({Title = "Downed", Icon = "shield"})
+
+    Tab:Toggle({
+        Title = "Enable Downed Protection (เนเธขเธ+เธเนเธญเธเธเธฑเธ)",
+        Default = Config.Enabled,
+        Callback = function(v)
+            Config.Enabled = v
+            Window:Notify({Title = "Downed Protection", Description = v and "เน€เธเธดเธ”" or "เธเธดเธ”", Duration = 1.6})
+            -- If disabling, immediately restore/cleanup if currently separated/attached
+            if not v then
+                restoreModel()
+                for hum, _ in pairs(state.antiKillConns) do
+                    -- only detach if it's a humanoid entry (attrConn might exist)
+                    if hum and hum:IsA and hum:IsA("Humanoid") then
+                        detachAntiKill(hum)
+                    end
+                end
+            else
+                -- if enabling and player already downed, apply immediately
+                local char = lp.Character
+                if char and char:FindFirstChild("Humanoid") then
+                    local hum = char:FindFirstChild("Humanoid")
+                    if hum and hum:GetAttribute and hum:GetAttribute("HasBeenDowned") then
+                        separateModel(char)
+                        if Config.AntiKillEnabled then attachAntiKill(hum) end
+                    end
+                end
+            end
+        end
+    })
+
+    Tab:Slider({
+        Title = "Stretch Amount",
+        Step = 0.1,
+        Value = {Min = 1.0, Max = 8.0, Default = Config.StretchAmount},
+        Callback = function(v)
+            Config.StretchAmount = tonumber(v)
+        end
+    })
+
+    Tab:Slider({
+        Title = "Spread Radius",
+        Step = 1,
+        Value = {Min = 0, Max = 60, Default = Config.SpreadRadius},
+        Callback = function(v)
+            Config.SpreadRadius = tonumber(v)
+        end
+    })
+
+    Tab:Toggle({
+        Title = "Enable AntiKill",
+        Default = Config.AntiKillEnabled,
+        Callback = function(v)
+            Config.AntiKillEnabled = v
+            if not v then
+                -- detach all anti-kill handlers immediately
+                for hum, _ in pairs(state.antiKillConns) do
+                    if hum and hum:IsA and hum:IsA("Humanoid") then
+                        detachAntiKill(hum)
+                    end
+                end
+            end
+        end
+    })
+
+    Tab:Slider({
+        Title = "Protect Health",
+        Step = 1,
+        Value = {Min = 1, Max = 50, Default = Config.ProtectHealth},
+        Callback = function(v)
+            Config.ProtectHealth = tonumber(v)
+        end
+    })
+
+    Tab:Toggle({
+        Title = "Auto Revive",
+        Default = Config.AutoRevive,
+        Callback = function(v)
+            Config.AutoRevive = v
+        end
+    })
+
+    Tab:Button({
+        Title = "Restore Now",
+        Callback = function()
+            restoreModel()
+            -- detach humanoid anti-kill handlers
+            for hum, _ in pairs(state.antiKillConns) do
+                if hum and hum:IsA and hum:IsA("Humanoid") then
+                    detachAntiKill(hum)
+                end
+            end
+            Window:Notify({Title = "Restore", Description = "เธเธทเธเธชเธ เธฒเธเนเธกเน€เธ”เธฅเนเธฅเธฐเธ–เธญเธ”เธเธฒเธฃเธเนเธญเธเธเธฑเธเนเธฅเนเธง", Duration = 1.6})
+        end
+    })
+end
+
+-- try to attach GUI to global Window if present
+safeCall(function() setupGUI(rawget(_G, "Window") or rawget(script, "Window")) end)
+
+-- Return API in case other scripts want to control programmatically
+return {
+    Config = Config,
+    separateModel = separateModel,
+    restoreModel = restoreModel,
+    attachAntiKill = attachAntiKill,
+    detachAntiKill = detachAntiKill,
+}
