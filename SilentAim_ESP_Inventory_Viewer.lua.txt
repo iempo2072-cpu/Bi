@@ -75,7 +75,7 @@ CombatTab:Toggle({
 })
 
 -------------------------------------------------
--- Silent Aim: คมมาก ยิงโดน antiaim ได้จริง -----
+-- Silent Aim: ยิงสลับจุด root กับ head -------
 -------------------------------------------------
 local SilentAimEnabled = false
 local FOVCircle = Drawing.new("Circle")
@@ -118,7 +118,11 @@ CombatTab:Slider({
     end
 })
 
--- ===== Calculation: ยิง root+head เฉลี่ย โดน antiaim 100% ไม่มี prediction ไม่มี ping =====
+-- --- ยิง root/head สลับแบบ random ---
+local lastSwitch = 0
+local lastTarget = nil
+local aimHead = true          -- เริ่มที่ head ก่อน
+
 local function GetClosestTargetFOV()
     local closest
     local shortest = math.huge
@@ -144,21 +148,32 @@ oldFire = hookfunction(send.FireServer,function(self,...)
     if SilentAimEnabled then
         local target = GetClosestTargetFOV()
         if target and target.Character then
-            local root = target.Character:FindFirstChild("HumanoidRootPart")
             local head = target.Character:FindFirstChild("Head")
-            if root then
-                -- ยิงเฉลี่ยระหว่างหัวกับลำตัว
-                local aimPos
-                if head then
-                    aimPos = (root.Position + head.Position) * 0.5
+            local root = target.Character:FindFirstChild("HumanoidRootPart")
+            if head and root then
+                -- สลับ root <-> head ทุกการยิงหรือทุก 0.2 วิ random
+                local now = tick()
+                if target ~= lastTarget or (now - lastSwitch > 0.2 and math.random() > 0.5) then
+                    aimHead = not aimHead
+                    lastTarget = target
+                    lastSwitch = now
+                end
+
+                local aimPos, inst
+                if aimHead then
+                    aimPos = head.Position
+                    inst = head
                 else
                     aimPos = root.Position
+                    inst = root
                 end
+
                 args[4] = CFrame.new(math.huge,math.huge,math.huge,0,0,0,0,0,0,0,0,0)
-                args[5] = {[1]={[1]={["Instance"]=root,["Position"]=aimPos}}}
+                args[5] = {[1]={[1]={["Instance"]=inst,["Position"]=aimPos}}}
+
                 local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
                 if myHead then
-                    -- Bullet Debug (optional)
+                    -- Bullet Debug
                     local dist = (aimPos-myHead.Position).Magnitude
                     local bullet = Instance.new("Part")
                     bullet.Anchored = true
@@ -166,7 +181,7 @@ oldFire = hookfunction(send.FireServer,function(self,...)
                     bullet.Material = Enum.Material.Neon
                     bullet.Size = Vector3.new(0.1,0.1,dist)
                     bullet.CFrame = CFrame.new(myHead.Position,aimPos)*CFrame.new(0,0,-dist/2)
-                    bullet.Color = Color3.fromRGB(255,100,255)
+                    bullet.Color = aimHead and Color3.fromRGB(255,255,50) or Color3.fromRGB(150,255,255)
                     bullet.Parent = workspace
                     Debris:AddItem(bullet,1)
                 end
@@ -182,16 +197,23 @@ RunService.RenderStepped:Connect(function()
         local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
         local target = GetClosestTargetFOV()
         if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
-            local root = target.Character.HumanoidRootPart
             local head = target.Character:FindFirstChild("Head")
-            local aimPos = head and ((root.Position + head.Position) * 0.5) or root.Position
-            local my2D = Vector2.new(Camera:WorldToViewportPoint(myHead.Position).X,Camera:WorldToViewportPoint(myHead.Position).Y)
-            local t2D = Vector2.new(Camera:WorldToViewportPoint(aimPos).X, Camera:WorldToViewportPoint(aimPos).Y)
-            local distFromCenter = (t2D - Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)).Magnitude
-            if not showFov or distFromCenter<=FOVCircle.Radius then
-                TracerLine.From = my2D
-                TracerLine.To = t2D
-                TracerLine.Visible = true
+            local root = target.Character:FindFirstChild("HumanoidRootPart")
+            if head and root then
+                -- ตำแหน่งเดียวกับการยิง (ตาม aimHead)
+                local aimPos = aimHead and head.Position or root.Position
+                if myHead then
+                    local my2D = Vector2.new(Camera:WorldToViewportPoint(myHead.Position).X,Camera:WorldToViewportPoint(myHead.Position).Y)
+                    local t2D = Vector2.new(Camera:WorldToViewportPoint(aimPos).X, Camera:WorldToViewportPoint(aimPos).Y)
+                    local distFromCenter = (t2D - Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)).Magnitude
+                    if not showFov or distFromCenter<=FOVCircle.Radius then
+                        TracerLine.From = my2D
+                        TracerLine.To = t2D
+                        TracerLine.Visible = true
+                    else
+                        TracerLine.Visible = false
+                    end
+                end
             else
                 TracerLine.Visible = false
             end
