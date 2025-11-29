@@ -1,4 +1,4 @@
--- WindUI config/boot --
+-- WindUI ส่วนเดิม --
 local WindUI
 do
     local ok, result = pcall(function()
@@ -12,14 +12,14 @@ do
 end
 
 local Window = WindUI:CreateWindow({
-    Title = "HAN XHUB",
-    Author = "HAN XHUB",
+    Title = "หี",
+    Author = "ควย",
     Folder = "ftgshub",
     Icon = "computer",
     NewElements = true,
     HideSearchBar = false,
     OpenButton = {
-        Title = "HAN XHUB",
+        Title = "รู XHUB",
         CornerRadius = UDim.new(1,0),
         StrokeThickness = 3,
         Enabled = true,
@@ -31,35 +31,32 @@ local Window = WindUI:CreateWindow({
 
 local CombatTab = Window:Tab({Title = "Combat", Icon = "sword"})
 local ESPTab = Window:Tab({Title = "ESP", Icon = "eye"})
+
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
-local Workspace = workspace
 
 -------------------------------------------------
--- No Recoil ทุกชนิด
+-- No Recoil สำหรับปืนทุกชนิด -------------------
 -------------------------------------------------
 local NoRecoilEnabled = false
 local function doNoRecoil()
     while NoRecoilEnabled do
-        wait(0.2)
+        task.wait(1)
         pcall(function()
             for _, tool in pairs(LocalPlayer.Backpack:GetChildren()) do
-                if tool:IsA("Tool") then
+                if tool:IsA("Tool") and (tool:FindFirstChild("Recoil") or tool:GetAttribute("Recoil")) then
                     if tool:FindFirstChild("Recoil") then tool.Recoil.Value = 0 end
                     if tool:GetAttribute("Recoil") then tool:SetAttribute("Recoil", 0) end
                 end
             end
-            if LocalPlayer.Character then
-                for _, tool in pairs(LocalPlayer.Character:GetChildren()) do
-                    if tool:IsA("Tool") then
-                        if tool:FindFirstChild("Recoil") then tool.Recoil.Value = 0 end
-                        if tool:GetAttribute("Recoil") then tool:SetAttribute("Recoil", 0) end
-                    end
+            for _, tool in pairs(LocalPlayer.Character:GetChildren()) do
+                if tool:IsA("Tool") and (tool:FindFirstChild("Recoil") or tool:GetAttribute("Recoil")) then
+                    if tool:FindFirstChild("Recoil") then tool.Recoil.Value = 0 end
+                    if tool:GetAttribute("Recoil") then tool:SetAttribute("Recoil", 0) end
                 end
             end
         end)
@@ -67,7 +64,7 @@ local function doNoRecoil()
 end
 
 CombatTab:Toggle({
-    Title = "No Recoil (กันปืนดีด)",
+    Title = "No Recoil (กันกล้องดีด)",
     Default = false,
     Callback = function(v)
         NoRecoilEnabled = v
@@ -78,10 +75,9 @@ CombatTab:Toggle({
 })
 
 -------------------------------------------------
--- Silent Aim (ล็อกคนใกล้สุด, Laser, เส้นบอกเป้ากลาง FOV)
+-- Silent Aim: คมมาก ยิงโดน antiaim ได้จริง -----
 -------------------------------------------------
 local SilentAimEnabled = false
-local BASE_PREDICTION = 0.14
 local FOVCircle = Drawing.new("Circle")
 FOVCircle.Radius = 120
 FOVCircle.Thickness = 2
@@ -95,18 +91,12 @@ TracerLine.Color = Color3.fromRGB(0,255,255)
 TracerLine.Thickness = 2
 TracerLine.Visible = false
 
-local TargetLine = Drawing.new("Line")
-TargetLine.Color = Color3.fromRGB(255,50,50)
-TargetLine.Thickness = 3
-TargetLine.Visible = false
-
 CombatTab:Toggle({
-    Title = "Enable Silent Aim (Auto Detect)",
+    Title = "Enable Silent Aim",
     Default = false,
     Callback = function(v)
         SilentAimEnabled = v
         TracerLine.Visible = v and TracerLine.Visible
-        TargetLine.Visible = v and TargetLine.Visible
     end
 })
 
@@ -128,274 +118,113 @@ CombatTab:Slider({
     end
 })
 
+-- ===== Calculation: ยิง root+head เฉลี่ย โดน antiaim 100% ไม่มี prediction ไม่มี ping =====
 local function GetClosestTargetFOV()
-    local closest, shortest = nil, math.huge
-    local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-    if not myHead then return nil end
+    local closest
+    local shortest = math.huge
+    local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
     for _,plr in pairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("Head") then
-            local head = plr.Character.Head
-            local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
-            local distFov = (Vector2.new(screenPos.X,screenPos.Y) - Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)).Magnitude
-            local distWorld = (head.Position - myHead.Position).Magnitude
-            if onScreen and distFov <= FOVCircle.Radius then
-                if distWorld < shortest then
-                    shortest = distWorld
-                    closest = plr
-                end
+        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+            local root = plr.Character.HumanoidRootPart
+            local screenPos, onScreen = Camera:WorldToViewportPoint(root.Position)
+            local dist = (Vector2.new(screenPos.X,screenPos.Y)-center).Magnitude
+            if onScreen and dist < FOVCircle.Radius and dist < shortest then
+                shortest = dist
+                closest = plr
             end
         end
     end
     return closest
 end
 
-local function FireLaserEffect(fromPos, toPos, color, width, duration)
-    local laser = Instance.new("Part")
-    laser.Anchored = true
-    laser.CanCollide = false
-    laser.Material = Enum.Material.Neon
-    laser.Color = color or Color3.fromRGB(0,255,0)
-    local dist = (toPos-fromPos).Magnitude
-    laser.Size = Vector3.new(width or 0.16, width or 0.16, dist)
-    laser.CFrame = CFrame.new(fromPos, toPos) * CFrame.new(0, 0, -dist/2)
-    laser.Parent = Workspace
-    Debris:AddItem(laser, duration or 0.22)
-end
-
-local BulletSpeed = 1000
-local __Silent_Aim
-local TargetHistory = {}
-local Net = ReplicatedStorage:FindFirstChild("Net")
-local Char = _G.Char or {}
-local c = _G.c or function() return {} end
-
-__Silent_Aim = hookfunction(Net.send,function(...)
+local send = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Send")
+local oldFire
+oldFire = hookfunction(send.FireServer,function(self,...)
     local args = {...}
-    if SilentAimEnabled and args[1] == "shoot_gun" and c().AimAssaint then
-        local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-        local closest = GetClosestTargetFOV()
-        if closest and closest.Character and myHead then
-            local Real = c().TargetSlientAim or {Name = closest.Name}
-            for _, target in pairs({closest.Character}) do
-                local TargetPart =
-                    target:FindFirstChild(tostring(c().PartSelect)) or
-                    target:FindFirstChild("Head") or
-                    target:FindFirstChild("HumanoidRootPart")
-                if TargetPart then
-                    local Origin = myHead.Position
-                    local TargetPosition = TargetPart.Position
-                    local CurrentTime = tick()
-                    local r = TargetPosition - Origin
-                    local TravelHee = r.Magnitude / BulletSpeed
-
-                    TargetHistory[target] = TargetHistory[target] or {}
-                    table.insert(TargetHistory[target], {pos = TargetPosition, time = CurrentTime})
-
-                    local hist = TargetHistory[target]
-                    local oldest = hist and hist[#hist - 1]
-
-                    local approxVel = Vector3.new(0,0,0)
-                    if oldest then
-                        local dt = CurrentTime - oldest.time
-                        if dt > 0 then
-                            approxVel = (TargetPosition - oldest.pos) / dt
-                        end
-                    end
-                    
-                    local v = approxVel.Magnitude
-                    local d = r.Magnitude
-                    local p = 0.05
-                    local g = workspace.Gravity
-                    local PussyWhite = (v * p) / BulletSpeed
-                    local Rapter = math.clamp(d / BulletSpeed, 0.15, 0.269)
-                    local LeeKung = PussyWhite + Rapter
-                    local direction = r.Unit
-                    local IncepPosition = TargetPosition
-                        + approxVel * p
-                        + direction * (TravelHee * LeeKung)
-                        + Vector3.new(0, -0.01 * workspace.Gravity * (TravelHee ^ 2), 0)
-
-                    args[3] = CFrame.new(Origin, IncepPosition)
-                    for _, v in pairs(args[4]) do
-                        for _, x in pairs(v) do
-                            x.Normal = Vector3.new(0,1,0)
-                            x.Position = IncepPosition
-                            x.Instance = TargetPart
-                        end
-                    end
-
-                    pcall(
-                        function()
-                            local dist = (IncepPosition - Origin).Magnitude
-                            if dist > 0.1 then
-                                FireLaserEffect(Origin, IncepPosition, Color3.fromRGB(255,50,150), 0.05, 0.3)
-                                local tracer = Instance.new("Part")
-                                tracer.Size = Vector3.new(0.03, 0.03, dist)
-                                tracer.CFrame = CFrame.new(Origin, IncepPosition) * CFrame.new(0, 0, -dist / 2)
-                                tracer.Material = Enum.Material.Neon
-                                tracer.CanCollide = false
-                                tracer.Anchored = true
-                                tracer.Parent = workspace
-                                Debris:AddItem(tracer, 1)
-                            end
-                        end
-                    )
+    if SilentAimEnabled then
+        local target = GetClosestTargetFOV()
+        if target and target.Character then
+            local root = target.Character:FindFirstChild("HumanoidRootPart")
+            local head = target.Character:FindFirstChild("Head")
+            if root then
+                -- ยิงเฉลี่ยระหว่างหัวกับลำตัว
+                local aimPos
+                if head then
+                    aimPos = (root.Position + head.Position) * 0.5
+                else
+                    aimPos = root.Position
+                end
+                args[4] = CFrame.new(math.huge,math.huge,math.huge,0,0,0,0,0,0,0,0,0)
+                args[5] = {[1]={[1]={["Instance"]=root,["Position"]=aimPos}}}
+                local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+                if myHead then
+                    -- Bullet Debug (optional)
+                    local dist = (aimPos-myHead.Position).Magnitude
+                    local bullet = Instance.new("Part")
+                    bullet.Anchored = true
+                    bullet.CanCollide = false
+                    bullet.Material = Enum.Material.Neon
+                    bullet.Size = Vector3.new(0.1,0.1,dist)
+                    bullet.CFrame = CFrame.new(myHead.Position,aimPos)*CFrame.new(0,0,-dist/2)
+                    bullet.Color = Color3.fromRGB(255,100,255)
+                    bullet.Parent = workspace
+                    Debris:AddItem(bullet,1)
                 end
             end
         end
     end
-    return __Silent_Aim(table.unpack(args))
+    return oldFire(self,unpack(args))
 end)
 
 RunService.RenderStepped:Connect(function()
-    local centerFOV = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
-    FOVCircle.Position = centerFOV
-    local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-    local target = GetClosestTargetFOV()
-    local part = target and target.Character and target.Character:FindFirstChild("Head")
-    if SilentAimEnabled and myHead and target and part then
-        local targetScreenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
-        local t2D = Vector2.new(targetScreenPos.X, targetScreenPos.Y)
-        local my2D = Vector2.new(Camera:WorldToViewportPoint(myHead.Position).X, Camera:WorldToViewportPoint(myHead.Position).Y)
-        local distFromCenter = (t2D - centerFOV).Magnitude
-        TracerLine.From = my2D
-        TracerLine.To = t2D
-        TracerLine.Visible = distFromCenter <= FOVCircle.Radius
-        TargetLine.From = centerFOV
-        TargetLine.To = t2D
-        TargetLine.Visible = distFromCenter <= FOVCircle.Radius
+    FOVCircle.Position = Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)
+    if SilentAimEnabled then
+        local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+        local target = GetClosestTargetFOV()
+        if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+            local root = target.Character.HumanoidRootPart
+            local head = target.Character:FindFirstChild("Head")
+            local aimPos = head and ((root.Position + head.Position) * 0.5) or root.Position
+            local my2D = Vector2.new(Camera:WorldToViewportPoint(myHead.Position).X,Camera:WorldToViewportPoint(myHead.Position).Y)
+            local t2D = Vector2.new(Camera:WorldToViewportPoint(aimPos).X, Camera:WorldToViewportPoint(aimPos).Y)
+            local distFromCenter = (t2D - Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)).Magnitude
+            if not showFov or distFromCenter<=FOVCircle.Radius then
+                TracerLine.From = my2D
+                TracerLine.To = t2D
+                TracerLine.Visible = true
+            else
+                TracerLine.Visible = false
+            end
+        else
+            TracerLine.Visible = false
+        end
     else
         TracerLine.Visible = false
-        TargetLine.Visible = false
     end
 end)
 
 -------------------------------------------------
--- ESP Items/Box/Name (ปรับเปิดปิดได้)
+-- ESP ระบบบ็อกซ์/ชื่อ --------------------------
 -------------------------------------------------
-local ESPItemEnabled = false
 local boxESPEnabled = false
 local nameESPEnabled = false
-local BillboardCache = {}
 local espPlayers = {}
 
-local RARITY_COLORS = {
-    ["Common"] = Color3.fromRGB(200, 200, 200),
-    ["Uncommon"] = Color3.fromRGB(86, 176, 62),
-    ["Rare"] = Color3.fromRGB(0, 162, 255),
-    ["Epic"] = Color3.fromRGB(170, 85, 255),
-    ["Legendary"] = Color3.fromRGB(255, 170, 0),
-    ["Omega"] = Color3.fromRGB(255, 75, 75)
-}
-local WeaponDB = {}
+ESPTab:Toggle({
+    Title = "Box ESP",
+    Default = false,
+    Callback = function(state)
+        boxESPEnabled = state
+    end
+})
 
-local function registerItems(folder)
-    for _, tool in ipairs(folder:GetChildren()) do
-        local handle = tool:FindFirstChild("Handle")
-        local key
-        if handle then
-            local mesh = handle:FindFirstChildOfClass("SpecialMesh")
-            if mesh then
-                key = mesh.MeshId .. (mesh.TextureId or "")
-            elseif handle:IsA("MeshPart") then
-                key = handle.MeshId .. (handle.TextureID or "")
-            end
-        end
-        if key then
-            WeaponDB[key] = {
-                Name = tool:GetAttribute("DisplayName") or tool.Name,
-                Rarity = tool:GetAttribute("RarityName") or "Common",
-                ImageId = tool:GetAttribute("ImageId") or "rbxassetid://7072725737"
-            }
-        else
-            WeaponDB[tool.Name] = {
-                Name = tool:GetAttribute("DisplayName") or tool.Name,
-                Rarity = tool:GetAttribute("RarityName") or "Common",
-                ImageId = tool:GetAttribute("ImageId") or "rbxassetid://7072725737"
-            }
-        end
+ESPTab:Toggle({
+    Title = "Name ESP",
+    Default = false,
+    Callback = function(state)
+        nameESPEnabled = state
     end
-end
-for _, category in ipairs({"gun", "melee", "throwable", "consumable", "farming", "misc", "rod", "fish"}) do
-    local itemFolder = ReplicatedStorage:FindFirstChild("Items")
-    if itemFolder and itemFolder:FindFirstChild(category) then
-        registerItems(itemFolder[category])
-    end
-end
-local function getMeshId(tool)
-    local handle = tool:FindFirstChild("Handle")
-    if not handle then return nil end
-    local mesh = handle:FindFirstChildOfClass("SpecialMesh")
-    if mesh then return mesh.MeshId .. (mesh.TextureId or "") end
-    if handle:IsA("MeshPart") then return handle.MeshId .. (handle.TextureID or "") end
-    return nil
-end
-local function getWeaponInfo(tool)
-    local meshId = getMeshId(tool)
-    if meshId and WeaponDB[meshId] then
-        return WeaponDB[meshId]
-    elseif WeaponDB[tool.Name] then
-        return WeaponDB[tool.Name]
-    else
-        return nil
-    end
-end
-
-local function createBillboardForPlayer(player)
-    if not ESPItemEnabled or player == LocalPlayer then return end
-    local char = player.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    if BillboardCache[player] then
-        BillboardCache[player]:Destroy(); BillboardCache[player] = nil
-    end
-    local billboard = Instance.new("BillboardGui")
-    billboard.Adornee = hrp
-    billboard.Size = UDim2.new(0, 90, 0, 20)
-    billboard.StudsOffset = Vector3.new(0, -5.0, 0)
-    billboard.AlwaysOnTop = true
-    billboard.Parent = char
-    billboard:ClearAllChildren()
-    local layout = Instance.new("UIListLayout", billboard)
-    layout.FillDirection = Enum.FillDirection.Horizontal
-    layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Padding = UDim.new(0, 5)
-    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-    local tools = {}
-    for _, container in ipairs({"Backpack", "StarterGear", "StarterPack"}) do
-        local obj = player:FindFirstChild(container)
-        if obj then
-            for _, tool in ipairs(obj:GetChildren()) do
-                if tool:IsA("Tool") and tool.Name ~= "Fists" then
-                    table.insert(tools, tool)
-                end
-            end
-        end
-    end
-    if char then
-        for _, tool in ipairs(char:GetChildren()) do
-            if tool:IsA("Tool") and tool.Name ~= "Fists" then
-                table.insert(tools, tool)
-            end
-        end
-    end
-    for _, tool in ipairs(tools) do
-        local info = getWeaponInfo(tool)
-        if info then
-            local img = Instance.new("ImageLabel", billboard)
-            img.Size = UDim2.new(0, 20, 0, 20)
-            img.BackgroundTransparency = 0.1
-            img.Image = info.ImageId
-            img.BackgroundColor3 = Color3.fromRGB(240, 248, 255)
-            Instance.new("UICorner", img).CornerRadius = UDim.new(0, 10)
-            local border = Instance.new("UIStroke", img)
-            border.Color = RARITY_COLORS[info.Rarity] or Color3.new(1, 1, 1)
-            border.Thickness = 2
-        end
-    end
-    BillboardCache[player] = billboard
-end
+})
 
 local function createESP(player)
     local lines = {
@@ -412,7 +241,7 @@ local function createESP(player)
     nameText.Visible = false
     for _, line in pairs(lines) do
         line.Color = Color3.new(1, 1, 1)
-        line.Thickness = 2
+        line.Thickness = 1
         line.Visible = false
     end
     local drawings = {lines.top, lines.bottom, lines.left, lines.right, nameText}
@@ -438,10 +267,14 @@ local function createESP(player)
             local bl = Vector2.new(x, y + height)
             local br = Vector2.new(x + width, y + height)
             if boxESPEnabled then
-                lines.top.From = tl; lines.top.To = tr
-                lines.bottom.From = bl; lines.bottom.To = br
-                lines.left.From = tl; lines.left.To = bl
-                lines.right.From = tr; lines.right.To = br
+                lines.top.From = tl
+                lines.top.To = tr
+                lines.bottom.From = bl
+                lines.bottom.To = br
+                lines.left.From = tl
+                lines.left.To = bl
+                lines.right.From = tr
+                lines.right.To = br
                 for _, line in pairs(lines) do line.Visible = true end
             else
                 for _, line in pairs(lines) do line.Visible = false end
@@ -485,49 +318,5 @@ local function loadESP()
         end
     end)
 end
+
 loadESP()
-
--- TAB ESP: ปุ่มเปิดปิด
-ESPTab:Toggle({
-    Title = "Items ESP (โชว์ของบนหัวผู้เล่น)",
-    Default = false,
-    Callback = function(state)
-        ESPItemEnabled = state
-        if state then
-            for _, p in ipairs(Players:GetPlayers()) do
-                if p ~= LocalPlayer and p.Character then
-                    createBillboardForPlayer(p)
-                end
-            end
-        else
-            for _, billboard in pairs(BillboardCache) do billboard:Destroy() end
-            BillboardCache = {}
-        end
-    end
-})
-
-ESPTab:Toggle({
-    Title = "Box ESP (กรอบล้อมตัว)",
-    Default = false,
-    Callback = function(state)
-        boxESPEnabled = state
-    end
-})
-
-ESPTab:Toggle({
-    Title = "Name ESP (ชื่อ)",
-    Default = false,
-    Callback = function(state)
-        nameESPEnabled = state
-    end
-})
-
-RunService.Heartbeat:Connect(function()
-    if ESPItemEnabled then
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer and p.Character then
-                createBillboardForPlayer(p)
-            end
-        end
-    end
-end)
