@@ -1,0 +1,470 @@
+local cloneref = cloneref or function(...) return ... end
+local plrs = cloneref(game:GetService("Players"))
+local lp = plrs.LocalPlayer
+local TweenService = game:GetService("TweenService")
+local PathfindingService = game:GetService("PathfindingService")
+local Debris = game:GetService("Debris")
+local RunService = game:GetService("RunService")
+
+local IMM = false
+local activeWaypoints = {}
+local arcVisuals = {}
+local frozenConn = nil
+local RETRIES = 3
+local SPEED = 35
+
+local function isAlive()
+    local char = lp.Character
+    if not char then return false end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    return hum and hum.Health > 0
+end
+
+local function getHRP()
+    local char = lp.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getHum()
+    local char = lp.Character
+    return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+local function isGrounded()
+    local hrp = getHRP()
+    if not hrp then return false end
+    local p = RaycastParams.new()
+    p.FilterDescendantsInstances = {lp.Character}
+    p.FilterType = Enum.RaycastFilterType.Exclude
+    return workspace:Raycast(hrp.Position, Vector3.new(0, -4.5, 0), p) ~= nil
+end
+
+local function waitForGround()
+    local t = 0
+    while not isGrounded() and t < 4 do
+        task.wait(0.05)
+        t += 0.05
+    end
+end
+
+-- Alle Türen in workspace.Map.Tiles finden und CanCollide = false setzen
+local function disableDoorCollisions()
+    local tilesFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Tiles")
+    if not tilesFolder then return end
+    for _, obj in ipairs(tilesFolder:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            local nameL = obj.Name:lower()
+            if nameL:find("door") then
+                obj.CanCollide = false
+            end
+        end
+    end
+end
+
+local function watchDoors()
+    local tilesFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Tiles")
+    if not tilesFolder then return end
+    tilesFolder.DescendantAdded:Connect(function(obj)
+        if obj:IsA("BasePart") then
+            local nameL = obj.Name:lower()
+            if nameL:find("door") then
+                obj.CanCollide = false
+            end
+        end
+    end)
+end
+
+local function freezeChar()
+    if frozenConn then frozenConn:Disconnect() end
+    local hum = getHum()
+    if hum then
+        hum.WalkSpeed = 0
+        hum.JumpPower = 0
+        hum.AutoRotate = false
+    end
+    frozenConn = RunService.Heartbeat:Connect(function()
+        local hrp = getHRP()
+        if hrp then
+            hrp.AssemblyLinearVelocity = Vector3.new(0, hrp.AssemblyLinearVelocity.Y, 0)
+            hrp.AssemblyAngularVelocity = Vector3.zero
+        end
+    end)
+end
+
+local function unfreezeChar()
+    if frozenConn then
+        frozenConn:Disconnect()
+        frozenConn = nil
+    end
+    local hum = getHum()
+    if hum then
+        hum.WalkSpeed = 16
+        hum.JumpPower = 50
+        hum.AutoRotate = true
+    end
+end
+
+local function clearArcVisuals()
+    for _, v in pairs(arcVisuals) do
+        if v and v.Parent then
+            TweenService:Create(v,
+                TweenInfo.new(0.2, Enum.EasingStyle.Quad),
+                {Transparency = 1, Size = Vector3.new(0.05, 0.05, 0.05)}
+            ):Play()
+            Debris:AddItem(v, 0.25)
+        end
+    end
+    arcVisuals = {}
+end
+
+local function spawnArcDot(pos, alpha)
+    local part = Instance.new("Part")
+    part.Size = Vector3.new(0.5, 0.5, 0.5)
+    part.Shape = Enum.PartType.Ball
+    part.Position = pos
+    part.Anchored = true
+    part.CanCollide = false
+    part.CastShadow = false
+    part.Material = Enum.Material.Neon
+    part.Color = Color3.fromHSV(0.55 + 0.2 * alpha, 1, 1)
+    part.Transparency = 0.2
+    part.Parent = workspace
+
+    TweenService:Create(part,
+        TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+        {Transparency = 0.7, Size = Vector3.new(0.3, 0.3, 0.3)}
+    ):Play()
+
+    table.insert(arcVisuals, part)
+end
+
+local function clearWaypoints()
+    for i, wp in pairs(activeWaypoints) do
+        if wp.pt then wp.pt:Cancel() end
+        if wp.ft then wp.ft:Cancel() end
+        if wp.part and wp.part.Parent then
+            TweenService:Create(wp.part,
+                TweenInfo.new(0.2, Enum.EasingStyle.Quad),
+                {Transparency = 1, Size = Vector3.new(0.05, 0.05, 0.05)}
+            ):Play()
+            Debris:AddItem(wp.part, 0.25)
+        end
+        activeWaypoints[i] = nil
+    end
+end
+
+local function removeWP(i)
+    local wp = activeWaypoints[i]
+    if not wp then return end
+    if wp.pt then wp.pt:Cancel() end
+    if wp.ft then wp.ft:Cancel() end
+    if wp.part and wp.part.Parent then
+        TweenService:Create(wp.part,
+            TweenInfo.new(0.15, Enum.EasingStyle.Quad),
+            {Transparency = 1, Size = Vector3.new(0.05, 0.05, 0.05)}
+        ):Play()
+        Debris:AddItem(wp.part, 0.2)
+    end
+    activeWaypoints[i] = nil
+end
+
+local function spawnWP(pos, i, total)
+    local part = Instance.new("Part")
+    part.Size = Vector3.new(1.4, 0.25, 1.4)
+    part.Shape = Enum.PartType.Cylinder
+    part.CFrame = CFrame.new(pos) * CFrame.Angles(0, 0, math.pi / 2)
+    part.Anchored = true
+    part.CanCollide = false
+    part.CastShadow = false
+    part.Material = Enum.Material.Neon
+    part.Color = Color3.fromHSV(0.33 * (1 - i / math.max(total, 1)), 1, 1)
+    part.Transparency = 0.3
+    part.Parent = workspace
+
+    local pt = TweenService:Create(part,
+        TweenInfo.new(0.55, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+        {Transparency = 0.75}
+    )
+    pt:Play()
+
+    local ft = TweenService:Create(part,
+        TweenInfo.new(0.75, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+        {CFrame = CFrame.new(pos + Vector3.new(0, 0.4, 0)) * CFrame.Angles(0, 0, math.pi / 2)}
+    )
+    ft:Play()
+
+    activeWaypoints[i] = {part = part, pt = pt, ft = ft}
+end
+
+local function buildVisuals(waypoints)
+    clearWaypoints()
+    clearArcVisuals()
+    for i, wp in ipairs(waypoints) do
+        spawnWP(wp.Position + Vector3.new(0, 0.6, 0), i, #waypoints)
+    end
+end
+
+local function computePath(from, to)
+    disableDoorCollisions()
+    local path = PathfindingService:CreatePath({
+        AgentRadius = 2,
+        AgentHeight = 5,
+        AgentCanJump = true,
+        AgentCanClimb = false,
+        WaypointSpacing = 4,
+        Costs = {Water = 100}
+    })
+    local ok = pcall(function() path:ComputeAsync(from, to) end)
+    if not ok or path.Status == Enum.PathStatus.NoPath then return nil end
+    return path:GetWaypoints()
+end
+
+local function measureObstacleHeight(from, to)
+    local p = RaycastParams.new()
+    p.FilterDescendantsInstances = {lp.Character}
+    p.FilterType = Enum.RaycastFilterType.Exclude
+    local maxHeight = math.max(from.Y, to.Y)
+    for i = 0, 8 do
+        local alpha = i / 8
+        local mid = from:Lerp(to, alpha)
+        local up = workspace:Raycast(mid, Vector3.new(0, 80, 0), p)
+        if up then
+            local h = mid.Y + up.Distance
+            if h > maxHeight then maxHeight = h end
+        end
+        local down = workspace:Raycast(mid + Vector3.new(0, 80, 0), Vector3.new(0, -80, 0), p)
+        if down and down.Position.Y > maxHeight then
+            maxHeight = down.Position.Y
+        end
+    end
+    return maxHeight
+end
+
+local function buildArcPoints(from, to, peakY)
+    local points = {}
+    local ARC_DOTS = 18
+    for i = 0, ARC_DOTS do
+        local a = i / ARC_DOTS
+        local x = from.X + (to.X - from.X) * a
+        local z = from.Z + (to.Z - from.Z) * a
+        local baseY = from.Y + (to.Y - from.Y) * a
+        local arcY = baseY + (peakY - math.max(from.Y, to.Y)) * math.sin(a * math.pi)
+        table.insert(points, Vector3.new(x, arcY, z))
+    end
+    return points
+end
+
+local function flyOver(from, to)
+    clearArcVisuals()
+    local hrp = getHRP()
+    if not hrp then return false end
+
+    local charHeight = 5
+    local obstacleTop = measureObstacleHeight(from, to)
+    local peakY = obstacleTop + charHeight + 2
+    local arcPoints = buildArcPoints(from, to, peakY)
+
+    for i, pt in ipairs(arcPoints) do
+        spawnArcDot(pt, i / #arcPoints)
+    end
+
+    for i, pt in ipairs(arcPoints) do
+        if not getgenv().AutoFarm or not isAlive() then
+            clearArcVisuals()
+            return false
+        end
+        local h = getHRP()
+        if not h then clearArcVisuals() return false end
+        local sp = h.Position
+        local segSteps = math.max(1, math.floor((pt - sp).Magnitude / (SPEED / 60)))
+        for s = 1, segSteps do
+            if not getgenv().AutoFarm or not isAlive() then clearArcVisuals() return false end
+            local hN = getHRP()
+            if not hN then clearArcVisuals() return false end
+            local interp = sp:Lerp(pt, s / segSteps)
+            local look = Vector3.new(pt.X - hN.Position.X, 0, pt.Z - hN.Position.Z)
+            if look.Magnitude > 0.01 then
+                hN.CFrame = CFrame.new(interp, interp + look.Unit)
+            else
+                hN.CFrame = CFrame.new(interp)
+            end
+            RunService.Heartbeat:Wait()
+        end
+        if arcVisuals[i] and arcVisuals[i].Parent then
+            TweenService:Create(arcVisuals[i],
+                TweenInfo.new(0.15, Enum.EasingStyle.Quad),
+                {Transparency = 1, Size = Vector3.new(0.05, 0.05, 0.05)}
+            ):Play()
+            Debris:AddItem(arcVisuals[i], 0.2)
+            arcVisuals[i] = nil
+        end
+    end
+
+    clearArcVisuals()
+    return true
+end
+
+local function stepTo(targetPos)
+    local hrp = getHRP()
+    if not hrp then return false end
+
+    local sX, sZ = hrp.Position.X, hrp.Position.Z
+    local eX, eZ = targetPos.X, targetPos.Z
+    local dist = math.sqrt((eX - sX)^2 + (eZ - sZ)^2)
+    local steps = math.max(1, math.floor(dist / (SPEED / 60)))
+    local fixedLookX = eX - sX
+    local fixedLookZ = eZ - sZ
+
+    for i = 1, steps do
+        if not getgenv().AutoFarm or not isAlive() then return false end
+        local hrpN = getHRP()
+        if not hrpN then return false end
+        if not isGrounded() then
+            waitForGround()
+            if not isAlive() then return false end
+        end
+        local alpha = i / steps
+        local ix = sX + (eX - sX) * alpha
+        local iz = sZ + (eZ - sZ) * alpha
+        local interp = Vector3.new(ix, hrpN.Position.Y, iz)
+        local lookDir = Vector3.new(fixedLookX, 0, fixedLookZ)
+        if lookDir.Magnitude > 0.01 then
+            hrpN.CFrame = CFrame.new(interp, interp + lookDir.Unit)
+        else
+            hrpN.CFrame = CFrame.new(interp)
+        end
+        RunService.Heartbeat:Wait()
+    end
+
+    local hrpF = getHRP()
+    if hrpF then
+        local finalPos = Vector3.new(eX, hrpF.Position.Y, eZ)
+        local lookDir = Vector3.new(fixedLookX, 0, fixedLookZ)
+        if lookDir.Magnitude > 0.01 then
+            hrpF.CFrame = CFrame.new(finalPos, finalPos + lookDir.Unit)
+        else
+            hrpF.CFrame = CFrame.new(finalPos)
+        end
+    end
+    return true
+end
+
+local function stopAll()
+    IMM = false
+    clearWaypoints()
+    clearArcVisuals()
+    unfreezeChar()
+end
+
+local function MTP(targetPos, useY)
+    if not getgenv().AutoFarm or IMM then return end
+    if not isAlive() then return end
+
+    IMM = true
+    clearWaypoints()
+    clearArcVisuals()
+    freezeChar()
+    disableDoorCollisions()
+
+    local function attempt(retriesLeft)
+        if not getgenv().AutoFarm or not isAlive() then stopAll() return end
+
+        local hrp = getHRP()
+        if not hrp then stopAll() return end
+
+        disableDoorCollisions()
+
+        local dest = Vector3.new(targetPos.X, useY and targetPos.Y or hrp.Position.Y, targetPos.Z)
+        local wps = computePath(hrp.Position, dest)
+
+        if not wps then
+            if retriesLeft > 0 then
+                task.wait(0.05)
+                attempt(retriesLeft - 1)
+            else
+                flyOver(hrp.Position, dest)
+                stopAll()
+            end
+            return
+        end
+
+        buildVisuals(wps)
+
+        local drifted = false
+        for i, wp in ipairs(wps) do
+            if not getgenv().AutoFarm or not isAlive() then
+                stopAll() return
+            end
+
+            local hrpC = getHRP()
+            if not hrpC then break end
+
+            if not isGrounded() then
+                waitForGround()
+                if not isAlive() then stopAll() return end
+            end
+
+            local d2 = Vector2.new(
+                hrpC.Position.X - wp.Position.X,
+                hrpC.Position.Z - wp.Position.Z
+            ).Magnitude
+            if i > 1 and d2 > 10 then
+                drifted = true
+                break
+            end
+
+            local ok
+            if wp.Action == Enum.PathWaypointAction.Jump then
+                local nxt = wps[i + 1]
+                ok = nxt and flyOver(hrpC.Position, nxt.Position) or true
+            else
+                ok = stepTo(wp.Position)
+            end
+
+            removeWP(i)
+
+            if not ok then
+                drifted = true
+                break
+            end
+
+            RunService.Heartbeat:Wait()
+        end
+
+        if drifted then
+            clearWaypoints()
+            clearArcVisuals()
+            task.wait(0.03)
+            attempt(RETRIES)
+            return
+        end
+
+        local hrpE = getHRP()
+        if hrpE and isAlive() then
+            hrpE.CFrame = CFrame.new(targetPos.X, hrpE.Position.Y, targetPos.Z)
+        end
+
+        stopAll()
+    end
+
+    attempt(RETRIES)
+end
+
+local function watchDeath()
+    local char = lp.Character or lp.CharacterAdded:Wait()
+    char:WaitForChild("Humanoid").Died:Connect(function()
+        getgenv().AutoFarm = false
+        stopAll()
+    end)
+    lp.CharacterAdded:Connect(function()
+        task.wait(1)
+        disableDoorCollisions()
+        watchDeath()
+    end)
+end
+
+watchDeath()
+watchDoors()
+
+getgenv().AutoFarm = true
+MTP(Vector3.new(254, 255, 261), true)
