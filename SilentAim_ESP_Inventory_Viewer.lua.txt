@@ -12,14 +12,14 @@ do
 end
 
 local Window = WindUI:CreateWindow({
-    Title = "หี",
-    Author = "ควย",
+    Title = ".",
+    Author = "..",
     Folder = "ftgshub",
     Icon = "computer",
     NewElements = true,
     HideSearchBar = false,
     OpenButton = {
-        Title = "รู XHUB",
+        Title = "mo XHUB",
         CornerRadius = UDim.new(1,0),
         StrokeThickness = 3,
         Enabled = true,
