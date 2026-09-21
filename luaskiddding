@@ -1,0 +1,1185 @@
+if not (game.PlaceId == 104715542330896 or game.PlaceId == 97556409405464) then return end
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local PathfindingService = game:GetService("PathfindingService")
+
+local LocalPlayer = Players.LocalPlayer
+local Net = require(ReplicatedStorage.Modules.Core.Net)
+local Client = LocalPlayer
+local Character = Client.Character or Client.CharacterAdded:Wait()
+local UserId = Client.UserId
+local PlayerGui = Client.PlayerGui
+local Humanoid = Character:WaitForChild("Humanoid")
+local RootPart = Character:WaitForChild("HumanoidRootPart")
+local Backpack = Client:WaitForChild("Backpack")
+
+Client.CharacterAdded:Connect(function(newCharacter)
+    Character = newCharacter
+    Humanoid = Character:WaitForChild("Humanoid")
+    RootPart = Character:WaitForChild("HumanoidRootPart")
+    Backpack = Client:WaitForChild("Backpack")
+end)
+
+for _, obj in pairs(workspace:GetDescendants()) do
+    if obj:IsA("Model") and obj.Name == "DoorSystem" then obj:Destroy() end
+end
+
+pcall(function()
+    local TransitionModule = require(ReplicatedStorage.Modules.Game.UI.TransitionUI)
+    TransitionModule.transition = function() return end
+end)
+
+pcall(function()
+    local CharCreator = require(ReplicatedStorage.Modules.Game.CharacterCreator.CharacterCreator)
+    if CharCreator.start then CharCreator.start = function(...) while true do task.wait(1) end end end
+end)
+
+if getgenv then getgenv().identifyexecutor = nil end
+if getfenv then getfenv().identifyexecutor = nil end
+
+-- BYPASS
+local v_u_1 = {}
+local v2 = game.ReplicatedStorage:WaitForChild("Remotes")
+local v_u_3 = { ["send"] = v2:WaitForChild("Send"), ["get"] = v2:WaitForChild("Get") }
+local v_u_4 = {["event"] = 0, ["func"] = 0}
+local v_u_5 = {}
+local v_u_6 = false
+local v_u_7 = {}
+function v_u_1.on_connect(p8) if v_u_6 then p8() else v_u_7[#v_u_7 + 1] = p8 end end
+function v_u_1.hook(p_u_9, p_u_10)
+    if not p_u_10 then error("Function nil for hook") end
+    if v_u_6 then
+        if v_u_5[p_u_9] then warn("Overwriting hook") else v_u_5[p_u_9] = p_u_10 end
+    else
+        v_u_1.on_connect(function() v_u_1.hook(p_u_9, p_u_10) end)
+        return
+    end
+end
+task.wait(0.1)
+local v_u_20 = v_u_3.send
+local v_u_21 = v_u_3.send.FireServer
+function v_u_1.send(p22, ...) v_u_4.event = v_u_4.event + 1 v_u_21(v_u_20, v_u_4.event, p22, ...) end
+local v_u_23 = v_u_3.get
+local v_u_24 = v_u_3.get.InvokeServer
+function v_u_1.get(p25, ...) v_u_4.func = v_u_4.func + 1 return v_u_24(v_u_23, v_u_4.func, p25, ...) end
+task.wait(0.1)
+local function v_u_29()
+    v_u_3.send.OnClientEvent:connect(function(p26, ...)
+        if v_u_5[p26] then v_u_5[p26](...) end
+    end)
+    function v_u_3.get.OnClientInvoke(p27, ...) if v_u_5[p27] then return v_u_5[p27](...) end end
+    if not pcall(function() for v28 = 1, #v_u_7 do v_u_7[v28]() end end) then pcall(function() v_u_1.send("issue", "On connect failed") end) end
+end
+function v_u_1.loaded()
+    function v_u_3.get.OnClientInvoke(p30) if p30 == "connect" then v_u_6 = true v_u_29() return true end end
+    v_u_1.hook("ping", function() return true end)
+end
+print("bypassed")
+
+pcall(function()
+    local m = workspace:FindFirstChild("Map")
+    if not m then return end
+    local p = m:FindFirstChild("Props")
+    if not p then return end
+    local a = p:FindFirstChild("ATMs")
+    if not a then return end
+    for _, d in pairs(a:GetDescendants()) do
+        if d:IsA("ProximityPrompt") then d.MaxActivationDistance = 22 end
+    end
+end)
+
+local SendRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Send")
+local oldFireServer
+oldFireServer = hookfunction(SendRemote.FireServer, function(self, ...)
+    local args = {...}
+    if args[2] == "crashed_car" then return nil end
+    return oldFireServer(self, ...)
+end)
+
+local VehiclesFolder = workspace:WaitForChild("Vehicles")
+local protectedVehicles = {}
+local function updateVehicleList()
+    protectedVehicles = {}
+    for _, model in ipairs(VehiclesFolder:GetDescendants()) do
+        if model:IsA("VehicleSeat") and model.Name == "DriverSeat" then
+            local vehicle = model:FindFirstAncestorOfClass("Model")
+            if vehicle then protectedVehicles[vehicle] = true end
+        end
+    end
+end
+updateVehicleList()
+local function isProtectedSeat(seat) local v = seat:FindFirstAncestorOfClass("Model") return v and protectedVehicles[v] == true end
+for _, seat in ipairs(workspace:GetDescendants()) do
+    if seat:IsA("Seat") or seat:IsA("VehicleSeat") then
+        if not isProtectedSeat(seat) then seat:Destroy() end
+    end
+end
+VehiclesFolder.DescendantAdded:Connect(function(obj)
+    if obj:IsA("VehicleSeat") and obj.Name == "DriverSeat" then updateVehicleList() end
+end)
+
+local SafeZoneFilterList = {}
+pcall(function()
+    local map = workspace:FindFirstChild("Map")
+    if not map then return end
+    local szi = map:FindFirstChild("SafeZoneIndicators")
+    if not szi then return end
+    for _, sz in ipairs(szi:GetChildren()) do
+        table.insert(SafeZoneFilterList, sz)
+        for _, part in ipairs(sz:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = false
+                part.CanTouch = false
+                part.CanQuery = false
+                table.insert(SafeZoneFilterList, part)
+            end
+        end
+    end
+end)
+
+local function getRaycastFilter(extra)
+    local filter = {Character}
+    for _, obj in ipairs(SafeZoneFilterList) do table.insert(filter, obj) end
+    if extra then for _, obj in ipairs(extra) do table.insert(filter, obj) end end
+    return filter
+end
+
+-- =========================================================
+-- CONFIG
+-- =========================================================
+local Config = {
+    WalkingSpeed = 25,
+    BikeSpeed = 25,
+    CarSpeed = 45,
+    TravelType = "Bike",
+    StopWalking = false,
+    Running = false,
+    Underground = true,
+    UndergroundDepth = 55,
+    WheelieEnabled = true,
+    WheelieOnlyBike = true,
+    WheelieAngle = 15,
+    AutoOpenAirdrop = false,
+    AirdropHoldDuration = 0.5,
+    AirdropScanInterval = 1,
+    AirdropStayFlying = true,
+}
+
+local Status = { State = "Idle" }
+local BusyWalk = false
+local TravelInProgress = false
+local LastKillTime = 0
+local ActiveVehicle = nil
+local LastVehicleLockTime = 0
+local VEHICLE_LOCK_INTERVAL = 120
+
+local POS = {
+    ATM = Vector3.new(179.200882, 255.290543, -236.355896),
+    BikeBuy = Vector3.new(228, 255, -249),
+    SafeY = 255,
+}
+
+local Sf = {}
+local function distTo(pos) return (pos - RootPart.Position).Magnitude end
+local function shouldStop() return not BusyWalk end
+
+local pathParts = {}
+function ClearPathLines()
+    for _, part in ipairs(pathParts) do if part and part.Parent then part:Destroy() end end
+    pathParts = {}
+end
+
+local jumpVisuals = {}
+function ClearJumpVisuals()
+    for _, v in ipairs(jumpVisuals) do if v and v.Parent then v:Destroy() end end
+    jumpVisuals = {}
+end
+
+local function CreateJumpCircle(position)
+    local circle = Instance.new("Part")
+    circle.Name = "JumpCircle"
+    circle.Shape = Enum.PartType.Cylinder
+    circle.Size = Vector3.new(0.3, 7, 7)
+    circle.Anchored = true
+    circle.CanCollide = false
+    circle.CanTouch = false
+    circle.CanQuery = false
+    circle.Material = Enum.Material.Neon
+    circle.BrickColor = BrickColor.new("Lime green")
+    circle.Transparency = 0.3
+    circle.CFrame = CFrame.new(position) * CFrame.Angles(0, 0, math.rad(90))
+    circle.Parent = workspace
+    table.insert(jumpVisuals, circle)
+    task.spawn(function()
+        for i = 1, 8 do
+            if not circle.Parent then break end
+            local size = 7 + i * 1.5
+            circle.Size = Vector3.new(0.3, size, size)
+            circle.Transparency = 0.3 + (i * 0.08)
+            task.wait(0.08)
+        end
+        if circle.Parent then circle:Destroy() end
+    end)
+end
+
+local function DrawPath(waypoints)
+    ClearPathLines()
+    if not waypoints or #waypoints < 2 then return end
+    for i = 1, #waypoints - 1 do
+        local p1 = waypoints[i].Position
+        local p2 = waypoints[i+1].Position
+        local d = (p2 - p1).Magnitude
+        if d > 0.5 then
+            local mid = (p1 + p2) / 2
+            local dir = (p2 - p1).Unit
+            local part = Instance.new("Part")
+            part.Size = Vector3.new(0.4, 0.4, d)
+            part.CFrame = CFrame.lookAt(mid, mid + dir)
+            part.Anchored = true
+            part.CanCollide = false
+            part.Material = Enum.Material.Neon
+            part.BrickColor = BrickColor.new("Bright blue")
+            part.Transparency = 0.25
+            part.Parent = workspace
+            table.insert(pathParts, part)
+        end
+    end
+end
+
+function Sf:ForceStop()
+    Config.StopWalking = true
+    Config.Running = false
+    ClearPathLines()
+    ClearJumpVisuals()
+    task.wait(0.05)
+    Config.StopWalking = false
+end
+
+function Sf:KillSelf()
+    if tick() - LastKillTime < 15 then return end
+    LastKillTime = tick()
+    task.wait(6)
+    pcall(function() Net.get("request_respawn") end)
+    task.wait(0.5)
+    pcall(function()
+        local char = Client.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then hum.Health = 0 end
+        end
+    end)
+end
+
+function Sf:LockOwnVehicle(force)
+    local now = tick()
+    if not force and (now - LastVehicleLockTime) < VEHICLE_LOCK_INTERVAL then return end
+    for _, vehicle in pairs(workspace.Vehicles:GetChildren()) do
+        if vehicle:IsA("Model") and vehicle:GetAttribute("OwnerUserId") == UserId then
+            if vehicle:GetAttribute("IsLocked") ~= true then
+                pcall(function() Net.send("lock_vehicle", vehicle, 2) end)
+            end
+            LastVehicleLockTime = now
+            return
+        end
+    end
+end
+
+function Sf:TeleportUpIfNeeded()
+    if not RootPart then return end
+    if RootPart.Position.Y < 200 then
+        RootPart.CFrame = CFrame.new(RootPart.Position.X, POS.SafeY, RootPart.Position.Z)
+        task.wait(0.5)
+    end
+end
+
+function Sf:GetMoney()
+    local ok, r = pcall(function()
+        local raw = PlayerGui.TopRightHud.Holder.Frame.MoneyTextLabel.Text
+        local s = raw:match("%$([%d,]+)")
+        if not s then return 0 end
+        return tonumber((s:gsub(",", ""))) or 0
+    end)
+    return ok and r or 0
+end
+
+function Sf:ATMMoney()
+    for _, v in ipairs(PlayerGui:GetDescendants()) do
+        if v:IsA("TextLabel") and string.find(v.Text, "Bank Balance") then
+            return tonumber(v.Text:match("%$(%d+)")) or 0
+        end
+    end
+    return 0
+end
+
+function Sf:GetInfo(w)
+    local amount, IsHaving, Uid, Using, Drowning = 0, false, nil, false, false
+    local Items = PlayerGui:FindFirstChild("Items")
+    if not Items then return {0, false, nil, false, false} end
+    local holder = Items:FindFirstChild("ItemsHolder")
+    if not holder then return {0, false, nil, false, false} end
+    local Holding = holder:FindFirstChild("ItemsScrollingFrame")
+    if not Holding then return {0, false, nil, false, false} end
+    for _, v in pairs(Holding:GetChildren()) do
+        if v.Name ~= 'Folder' and v.Name ~= 'UIGridLayout' and v.Name ~= "ItemTemplate" then
+            local itemName = v:FindFirstChild("ItemName")
+            if itemName and itemName.Text == w then
+                Uid = v.Name
+                amount = amount + 1
+                IsHaving = true
+                local eq = v:FindFirstChild('ItemEquipped')
+                local di = v:FindFirstChild('DestroyedItemIcon')
+                Using = eq and eq.Visible or false
+                Drowning = di and di.Visible or false
+            end
+        end
+    end
+    return {amount, IsHaving, Uid, Using, Drowning}
+end
+
+function Sf:GetCarFromType(types)
+    local Items = PlayerGui:FindFirstChild("Items")
+    if not Items then return nil end
+    local holder = Items:FindFirstChild("ItemsHolder")
+    if not holder then return nil end
+    local Sc = holder:FindFirstChild("ItemsScrollingFrame")
+    if not Sc then return nil end
+    if types == "Bike" then
+        for _, v in ipairs(Sc:GetChildren()) do
+            if v:GetAttribute("ItemType") == "bike" then return v.ItemName.Text end
+        end
+    else
+        for _, v in ipairs(Sc:GetChildren()) do
+            if v:GetAttribute('ItemType') == "car" then return v.ItemName.Text end
+        end
+    end
+    return nil
+end
+
+function Sf:WalkTo(targetPos, timeout)
+    if not targetPos then return false end
+    if not Character or not Character.Parent then
+        Character = Client.Character or Client.CharacterAdded:Wait()
+        Humanoid = Character:WaitForChild("Humanoid")
+        RootPart = Character:WaitForChild("HumanoidRootPart")
+    end
+    Config.StopWalking = false
+    Config.Running = true
+    local Root = Character:WaitForChild("HumanoidRootPart")
+    local Hum = Character:WaitForChild("Humanoid")
+
+    local path = PathfindingService:CreatePath({
+        AgentCanJump = true, AgentJumpHeight = 7.2, AgentHeight = 5,
+        AgentRadius = 2, AgentMaxSlope = 50, WaypointSpacing = 4,
+        Costs = {BlockedNode = 100, DoorArea = 1}
+    })
+    local ok = pcall(function() path:ComputeAsync(Root.Position, targetPos) end)
+
+    if not ok or path.Status ~= Enum.PathStatus.Success then
+        Config.Running = false
+        ClearPathLines()
+        Sf:KillSelf()
+        return false
+    end
+
+    local waypoints = path:GetWaypoints()
+    DrawPath(waypoints)
+
+    for _, wp in ipairs(waypoints) do
+        if shouldStop() then break end
+        local target = wp.Position + Vector3.new(0, 3, 0)
+        local startTime = tick()
+        while (Root.Position - target).Magnitude > 1.5 do
+            if shouldStop() then break end
+            if tick() - startTime > 10 then break end
+            task.wait(0.03)
+            if shouldStop() then break end
+            local curPos = Root.Position
+            local delta = target - curPos
+            local remaining = delta.Magnitude
+            local step = math.min(Config.WalkingSpeed * 0.03, remaining)
+            Root:PivotTo(CFrame.new(curPos + delta.Unit * step))
+            Net.send("set_sprinting_1", true)
+        end
+
+        if wp.Action == Enum.PathWaypointAction.Jump then
+            CreateJumpCircle(Vector3.new(wp.Position.X, wp.Position.Y, wp.Position.Z))
+            task.wait(0.1)
+            Hum:ChangeState(Enum.HumanoidStateType.Jumping)
+            task.wait(0.15)
+            if Hum.FloorMaterial == Enum.Material.Air then Hum.Jump = true end
+            local landTimeout = tick() + 1.5
+            while Hum.FloorMaterial == Enum.Material.Air and tick() < landTimeout do
+                task.wait(0.05)
+            end
+            task.wait(0.1)
+        end
+        if shouldStop() then break end
+    end
+
+    Config.Running = false
+    ClearPathLines()
+    task.delay(3, ClearJumpVisuals)
+    return not shouldStop()
+end
+
+function Sf:EnterVehicle(vehicle, timeout)
+    if not vehicle or not vehicle.PrimaryPart then return false end
+    timeout = timeout or 8
+    local st = tick()
+    while not Humanoid.Sit and tick() - st < timeout do
+        if shouldStop() then return false end
+        pcall(function()
+            for _, prompt in pairs(vehicle.PrimaryPart:GetDescendants()) do
+                if prompt:IsA('ProximityPrompt') then
+                    fireproximityprompt(prompt)
+                    task.wait(0.15)
+                end
+            end
+        end)
+        task.wait(0.2)
+    end
+    if Humanoid.Sit then
+        task.wait(0.3)
+        Sf:LockOwnVehicle(true)
+    end
+    return Humanoid.Sit
+end
+
+function Sf:ExitVehicle(timeout)
+    if not Humanoid.Sit then return true end
+    pcall(function() Net.get("exit_seat") end)
+    local st = tick()
+    while Humanoid.Sit and tick() - st < (timeout or 4) do task.wait(0.15) end
+    return not Humanoid.Sit
+end
+
+function Sf:DriveVehicleUnderground(model, destination, customSpeed, customVehicleType, stayFlying)
+    if not model or not model.PrimaryPart then return false end
+
+    local undergroundDepth = math.max(10, tonumber(Config.UndergroundDepth) or 55)
+
+    if Config.Underground then
+        local surfaceDestination = destination
+        local travelDestination = destination + Vector3.new(0, -undergroundDepth, 0)
+
+        local pivot = model:GetPivot()
+        model:PivotTo(CFrame.new(pivot.Position.X, travelDestination.Y, pivot.Position.Z) * pivot.Rotation)
+        task.wait(0.05)
+
+        local startPos = model.PrimaryPart.Position
+        local delta = travelDestination - startPos
+        local d = delta.Magnitude
+
+        if d > 0.05 then
+            local dir = delta.Unit
+            local speed = math.max(1, tonumber(customSpeed) or (Config.TravelType == "Car" and Config.CarSpeed or Config.BikeSpeed))
+            local started = tick()
+
+            while BusyWalk and model and model.PrimaryPart do
+                task.wait()
+                if not Humanoid.Sit then
+                    if not Sf:EnterVehicle(model, 3) then break end
+                end
+
+                local moved = math.min((tick() - started) * speed, d)
+                local newPos = startPos + dir * moved
+                local rotation = CFrame.lookAt(newPos, newPos + dir)
+
+                local vehicleTypeForWheelie = customVehicleType or Config.TravelType
+                if Config.WheelieEnabled and (not Config.WheelieOnlyBike or vehicleTypeForWheelie == 'Bike') then
+                    rotation = rotation * CFrame.Angles(math.rad(math.clamp(Config.WheelieAngle, 0, 35)), 0, 0)
+                end
+
+                model:PivotTo(rotation)
+                for _, part in pairs(model:GetDescendants()) do
+                    if part:IsA('BasePart') then
+                        part.AssemblyLinearVelocity = Vector3.zero
+                        part.AssemblyAngularVelocity = Vector3.zero
+                    end
+                end
+
+                if moved >= d then break end
+            end
+        end
+
+        if model and model.PrimaryPart then
+            if stayFlying then
+                local freezePos = Vector3.new(destination.X, destination.Y, destination.Z)
+                model:PivotTo(CFrame.new(freezePos) * model:GetPivot().Rotation)
+                for _, part in pairs(model:GetDescendants()) do
+                    if part:IsA('BasePart') then
+                        part.Anchored = true
+                        part.AssemblyLinearVelocity = Vector3.zero
+                        part.AssemblyAngularVelocity = Vector3.zero
+                    end
+                end
+                ActiveVehicle = model
+            else
+                local restorePos
+                if BusyWalk then restorePos = surfaceDestination
+                else
+                    local p = model.PrimaryPart.Position
+                    restorePos = Vector3.new(p.X, surfaceDestination.Y, p.Z)
+                end
+                model:PivotTo(CFrame.new(restorePos) * model:GetPivot().Rotation)
+                for _, part in pairs(model:GetDescendants()) do
+                    if part:IsA('BasePart') then
+                        part.AssemblyLinearVelocity = Vector3.zero
+                        part.AssemblyAngularVelocity = Vector3.zero
+                        part.Anchored = false
+                    end
+                end
+            end
+        end
+        Config.Running = false
+        ClearPathLines()
+        return true
+    end
+    return false
+end
+
+function Sf:PullVehicle()
+    local root = Character and Character:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    for _, vehicle in pairs(workspace.Vehicles:GetChildren()) do
+        if vehicle:IsA("Model") and vehicle:GetAttribute("OwnerUserId") == UserId then
+            local pp = vehicle.PrimaryPart or vehicle:FindFirstChildWhichIsA("BasePart")
+            if not pp then return end
+            local pos = root.CFrame * CFrame.new(0, 3, -12)
+            local rp = RaycastParams.new()
+            rp.FilterDescendantsInstances = getRaycastFilter({vehicle})
+            rp.FilterType = Enum.RaycastFilterType.Exclude
+            local ray = workspace:Raycast(pos.Position, Vector3.new(0, -200, 0), rp)
+            local groundY = ray and ray.Position.Y or 260
+            local offsetY = pp.Size.Y / 2
+            if ActiveVehicle then
+                for _, part in pairs(ActiveVehicle:GetDescendants()) do
+                    if part:IsA("BasePart") then part.Anchored = false end
+                end
+                ActiveVehicle = nil
+            end
+            pcall(function() vehicle:SetPrimaryPartCFrame(CFrame.new(pos.X, groundY + offsetY, pos.Z) * vehicle:GetPivot().Rotation) end)
+            for _, part in pairs(vehicle:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.AssemblyLinearVelocity = Vector3.zero
+                    part.AssemblyAngularVelocity = Vector3.zero
+                    part.Anchored = false
+                end
+            end
+        end
+    end
+end
+
+-- FIX: GetOrSpawnVehicle - kein Auto-Buy beim reinen Fahren
+local function GetOrSpawnVehicle(vehicleType, allowBuy)
+    if vehicleType == "Walk" then return nil end
+    for _, v in pairs(workspace.Vehicles:GetChildren()) do
+        if v:GetAttribute('OwnerUserId') == UserId then return v end
+    end
+    local vName = Sf:GetCarFromType(vehicleType)
+    if not vName then
+        if allowBuy then
+            if vehicleType == "Bike" then Sf:BuyBikeCrate() else Sf:BuyCarCrate() end
+            task.wait(1.5)
+        end
+        return nil
+    end
+    local Checker = Sf:GetInfo(vName)
+    if Checker[2] and not Checker[4] and not Checker[5] then
+        Net.get("toggle_equip_item", tostring(Checker[3]))
+        task.wait(0.3)
+    end
+    for i = 1, 10 do
+        for _, v in pairs(workspace.Vehicles:GetChildren()) do
+            if v:GetAttribute('OwnerUserId') == UserId then return v end
+        end
+        task.wait(0.2)
+    end
+    return nil
+end
+
+function Sf:GoToPosition(targetPos, timeout)
+    if Humanoid.Sit then
+        Sf:ExitVehicle(5)
+        task.wait(0.3)
+    end
+    BusyWalk = true
+    local attempts = 0
+    while distTo(targetPos) > 4 and attempts < 3 do
+        if not BusyWalk then break end
+        local success = Sf:WalkTo(targetPos, timeout or 30)
+        if not success then
+            BusyWalk = false
+            return false
+        end
+        attempts = attempts + 1
+        task.wait(0.1)
+    end
+    BusyWalk = false
+    return distTo(targetPos) <= 8
+end
+
+-- FIX: TravelTo - Fallback auf Walk wenn kein Fahrzeug
+function Sf:TravelTo(destination, stayFlying)
+    if not destination then return false end
+    if distTo(destination) <= 8 then return true end
+
+    local waited = 0
+    while TravelInProgress and waited < 60 do
+        task.wait(0.1)
+        waited = waited + 1
+        if distTo(destination) <= 8 then return true end
+    end
+    if TravelInProgress then return false end
+
+    TravelInProgress = true
+    BusyWalk = true
+
+    local ok, result = pcall(function()
+        local d = distTo(destination)
+
+        if Config.TravelType == "Walk" or d <= 15 then
+            if Humanoid.Sit then
+                Sf:ExitVehicle(5)
+                task.wait(0.3)
+            end
+            return Sf:WalkTo(destination, 40)
+        end
+
+        local vehicle = nil
+        local gotOk = pcall(function()
+            vehicle = GetOrSpawnVehicle(Config.TravelType, false)
+        end)
+        if not gotOk then vehicle = nil end
+
+        if not vehicle then
+            Status.State = "Kein " .. tostring(Config.TravelType) .. " -> laufe"
+            if Humanoid.Sit then
+                Sf:ExitVehicle(5)
+                task.wait(0.3)
+            end
+            return Sf:WalkTo(destination, 40)
+        end
+
+        if not Humanoid.Sit then
+            Sf:PullVehicle()
+            task.wait(0.4)
+            if not Sf:EnterVehicle(vehicle, 6) then
+                Status.State = "Einsteigen fehlgeschlagen -> laufe"
+                return Sf:WalkTo(destination, 40)
+            end
+        end
+
+        local speed = (Config.TravelType == "Car") and Config.CarSpeed or Config.BikeSpeed
+        return Sf:DriveVehicleUnderground(vehicle, destination, speed, Config.TravelType, stayFlying)
+    end)
+
+    BusyWalk = false
+    TravelInProgress = false
+
+    if not ok then
+        warn("[TravelTo] Fehler:", tostring(result))
+        return false
+    end
+    return result == true
+end
+
+function Sf:StopTravel()
+    BusyWalk = false
+    Config.StopWalking = true
+    task.wait(0.05)
+    Config.StopWalking = false
+    if ActiveVehicle then
+        for _, part in pairs(ActiveVehicle:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.Anchored = false
+                part.AssemblyLinearVelocity = Vector3.zero
+                part.AssemblyAngularVelocity = Vector3.zero
+            end
+        end
+        ActiveVehicle = nil
+    end
+    ClearPathLines()
+    ClearJumpVisuals()
+end
+
+local BIKE_CRATE_COST = 870
+function Sf:BuyBikeCrate()
+    pcall(function()
+        Status.State = "Buying Bike"
+        local bikeCrate = workspace.Map.Tiles.BurgerPlaceTile.UrbanCyclesAndSkates.Interior.Crates["Bike Crate"]
+        if not bikeCrate then return end
+        local touchPart = bikeCrate.Beacon.TouchPart
+        if self:GetMoney() < BIKE_CRATE_COST then
+            if self:ATMMoney() + self:GetMoney() < BIKE_CRATE_COST then return end
+            if not Sf:GoToPosition(POS.ATM, 30) then Sf:KillSelf() return end
+            task.wait(0.3)
+            local needed = BIKE_CRATE_COST - self:GetMoney()
+            if needed > 0 then Net.get("transfer_funds", "bank", "hand", needed) task.wait(0.5) end
+        end
+        if not Sf:GoToPosition(POS.BikeBuy, 35) then Sf:KillSelf() return end
+        task.wait(0.3)
+        if not Sf:GoToPosition(touchPart.Position, 25) then Sf:KillSelf() return end
+        task.wait(0.3)
+        if distTo(touchPart.Position) > 12 then
+            RootPart:PivotTo(CFrame.new(touchPart.Position + Vector3.new(0, 3, 0)))
+            task.wait(0.5)
+        end
+        Net.get("open_crate", bikeCrate:WaitForChild("CrateOptions"):WaitForChild("Basic"), "money")
+        task.wait(1)
+    end)
+end
+
+local CAR_CRATE_COST = 2500
+function Sf:BuyCarCrate()
+    pcall(function()
+        Status.State = "Buying Car"
+        local carCrate = nil
+        local map = workspace:FindFirstChild("Map")
+        if map then
+            for _, desc in pairs(map:GetDescendants()) do
+                if desc.Name == "Car Crate" or desc.Name == "CarCrate" then carCrate = desc break end
+            end
+        end
+        if not carCrate then return end
+        local touchPart = carCrate:FindFirstChild("Beacon") and carCrate.Beacon:FindFirstChild("TouchPart") or carCrate:FindFirstChildWhichIsA("BasePart")
+        if self:GetMoney() < CAR_CRATE_COST then
+            if self:ATMMoney() + self:GetMoney() < CAR_CRATE_COST then return end
+            if not Sf:GoToPosition(POS.ATM, 30) then Sf:KillSelf() return end
+            task.wait(0.3)
+            local needed = CAR_CRATE_COST - self:GetMoney()
+            if needed > 0 then Net.get("transfer_funds", "bank", "hand", needed) task.wait(0.5) end
+        end
+        if not Sf:GoToPosition(touchPart.Position, 30) then Sf:KillSelf() return end
+        task.wait(0.3)
+        if distTo(touchPart.Position) > 12 then
+            RootPart:PivotTo(CFrame.new(touchPart.Position + Vector3.new(0, 3, 0)))
+            task.wait(0.5)
+        end
+        Net.get("open_crate", carCrate:WaitForChild("CrateOptions"):WaitForChild("Basic"), "money")
+        task.wait(1)
+    end)
+end
+
+-- =========================================================
+-- WINDUI
+-- =========================================================
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+local Window = WindUI:CreateWindow({
+    Title = "🚗 Travel + 📦 Airdrop",
+    Icon = "rbxassetid://1481738249",
+    Author = "Travel Only",
+    Folder = "TravelAirdrop",
+    Size = UDim2.fromOffset(500, 560),
+    MinSize = Vector2.new(420, 420),
+    MaxSize = Vector2.new(720, 750),
+    Transparent = true, Theme = "Dark", Resizable = true,
+    SideBarWidth = 180, BackgroundImageTransparency = 0.42,
+    HideSearchBar = true, ScrollBarEnabled = false,
+    User = { Enabled = true, Anonymous = false, Name = LocalPlayer.Name,
+        Image = "rbxthumb://type=AvatarHeadShot&id=" .. LocalPlayer.UserId .. "&w=150&h=150",
+        Callback = function() end },
+})
+
+-- =========================================================
+-- TRAVEL TAB
+-- =========================================================
+local TravelTab = Window:Tab({ Title = '🚗 Travel', Icon = 'car' })
+
+TravelTab:Section({ Title = '📊 Status', Icon = 'activity' })
+local StatusLabel = TravelTab:Button({ Title = "Status", Desc = "Idle" })
+local MoneyLabel  = TravelTab:Button({ Title = "💸 Hand", Desc = "$0" })
+local BankLabel   = TravelTab:Button({ Title = "🏦 Bank", Desc = "$0" })
+
+task.spawn(function()
+    while task.wait(0.5) do
+        pcall(function()
+            StatusLabel:SetDesc(tostring(Status.State or "Idle"))
+            MoneyLabel:SetDesc("$" .. tostring(Sf:GetMoney() or 0))
+            BankLabel:SetDesc("$" .. tostring(Sf:ATMMoney() or 0))
+        end)
+    end
+end)
+
+TravelTab:Section({ Title = '🚗 Travel Type', Icon = 'navigation' })
+TravelTab:Dropdown({ Title = "🚦 Type", Values = {"Walk", "Bike", "Car"}, Value = "Bike", Callback = function(Value) Config.TravelType = Value end })
+
+TravelTab:Section({ Title = '⚡ Geschwindigkeit', Icon = 'settings' })
+TravelTab:Slider({ Title = "🚶 Walk Speed", Step = 1, Value = { Min = 10, Max = 60, Default = 25 }, Callback = function(Value) Config.WalkingSpeed = Value end })
+TravelTab:Slider({ Title = "🚲 Bike Speed", Step = 1, Value = { Min = 10, Max = 100, Default = 25 }, Callback = function(Value) Config.BikeSpeed = Value end })
+TravelTab:Slider({ Title = "🚗 Car Speed", Step = 1, Value = { Min = 10, Max = 150, Default = 45 }, Callback = function(Value) Config.CarSpeed = Value end })
+
+TravelTab:Section({ Title = '🚗 Fahrzeug Tween', Icon = 'car' })
+TravelTab:Toggle({ Title = "☑️ Underground Tween", Icon = "check", Type = "Checkbox", Value = true, Callback = function(Value) Config.Underground = Value end })
+TravelTab:Slider({ Title = "📏 Underground Depth", Step = 1, Value = { Min = 10, Max = 150, Default = 55 }, Callback = function(Value) Config.UndergroundDepth = Value end })
+TravelTab:Toggle({ Title = "☑️ Wheelie (Bike)", Icon = "check", Type = "Checkbox", Value = true, Callback = function(Value) Config.WheelieEnabled = Value end })
+TravelTab:Slider({ Title = "📐 Wheelie Angle", Step = 1, Value = { Min = 0, Max = 35, Default = 15 }, Callback = function(Value) Config.WheelieAngle = Value end })
+
+TravelTab:Section({ Title = '🛠️ Manuell', Icon = 'wrench' })
+TravelTab:Button({ Title = "🛒 Buy Bike", Icon = "shopping-cart", Callback = function() task.spawn(function() Sf:BuyBikeCrate() end) end })
+TravelTab:Button({ Title = "🛒 Buy Car", Icon = "shopping-cart", Callback = function() task.spawn(function() Sf:BuyCarCrate() end) end })
+TravelTab:Button({ Title = "🔒 Lock Vehicle", Icon = "lock", Callback = function() task.spawn(function() Sf:LockOwnVehicle(true) end) end })
+TravelTab:Button({ Title = "🛑 Stop Travel", Icon = "square", Callback = function() task.spawn(function() Sf:StopTravel() end) end })
+
+-- =========================================================
+-- AIRDROP TAB
+-- =========================================================
+local AirdropTab = Window:Tab({ Title = '📦 Airdrop', Icon = 'package' })
+
+AirdropTab:Section({ Title = '📊 Airdrop Status', Icon = 'activity' })
+
+local ADStatusLabel   = AirdropTab:Button({ Title = "Status",       Desc = "Keins" })
+local ADPointLabel    = AirdropTab:Button({ Title = "📍 Drop Point", Desc = "Keiner" })
+local ADDistanceLabel = AirdropTab:Button({ Title = "📏 Distanz",    Desc = "-" })
+local ADCrateLabel    = AirdropTab:Button({ Title = "📦 Crate",      Desc = "Keine" })
+
+local AirdropThread = nil
+
+local function safePos(inst)
+    if not inst then return nil end
+    if inst:IsA("BasePart") then return inst.Position end
+    if inst:IsA("Model") then
+        local pp = inst.PrimaryPart
+        if not pp then
+            for _, d in ipairs(inst:GetDescendants()) do
+                if d:IsA("BasePart") then pp = d break end
+            end
+        end
+        if pp then return pp.Position end
+    end
+    for _, d in ipairs(inst:GetDescendants()) do
+        if d:IsA("BasePart") then return d.Position end
+    end
+    return nil
+end
+
+local function FindActiveAirdrop()
+    local points = workspace:FindFirstChild("AirDropPoints")
+    if not points then return nil, nil end
+    for _, point in ipairs(points:GetChildren()) do
+        local onPoint = point:FindFirstChild("OnPointModel")
+        if not onPoint then
+            for _, d in ipairs(point:GetDescendants()) do
+                if d.Name == "OnPointModel" then onPoint = d break end
+            end
+        end
+        if onPoint and onPoint.Parent then
+            local pos = safePos(onPoint)
+            if pos then return point, pos end
+        end
+    end
+    return nil, nil
+end
+
+local function GetAirdropModelPos()
+    local adm = workspace:FindFirstChild("AirDropModel")
+    if not adm then return nil end
+    return safePos(adm)
+end
+
+local function FindCratePrompt()
+    local adm = workspace:FindFirstChild("AirDropModel")
+    if adm then
+        local prompts = {}
+        for _, d in ipairs(adm:GetDescendants()) do
+            if d:IsA("ProximityPrompt") then
+                if d.Parent and d.Parent.Name == "BoxInteriorBottom" then return d end
+                table.insert(prompts, d)
+            end
+        end
+        if #prompts > 0 then return prompts[1] end
+    end
+    for _, parent in ipairs(workspace:GetChildren()) do
+        local wc = parent:FindFirstChild("Weapon Crate", true)
+        if wc then
+            local model = wc:FindFirstChild("Model")
+            if model then
+                local box = model:FindFirstChild("BoxInteriorBottom")
+                if box then
+                    local prompt = box:FindFirstChild("ProximityPrompt")
+                    if prompt and prompt:IsA("ProximityPrompt") then return prompt end
+                end
+            end
+        end
+    end
+    for _, d in ipairs(workspace:GetDescendants()) do
+        if d:IsA("ProximityPrompt") and d.Parent and d.Parent.Name == "BoxInteriorBottom" then
+            return d
+        end
+    end
+    return nil
+end
+
+-- FIX: TriggerCratePrompt mit echter Hold-Simulation
+local function TriggerCratePrompt()
+    local prompt = FindCratePrompt()
+    if not prompt then return false end
+
+    local originalHold = prompt.HoldDuration or 0
+    local holdTime = math.max(originalHold, Config.AirdropHoldDuration)
+
+    pcall(function()
+        prompt.MaxActivationDistance = 100
+        prompt.RequiresLineOfSight = false
+    end)
+
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return false end
+
+    -- Echte Hold-Simulation
+    local ok1 = pcall(function()
+        prompt:InputHoldBegin()
+        task.wait(holdTime + 0.15)
+        prompt:InputHoldEnd()
+    end)
+
+    -- Fallback
+    local ok2 = pcall(function()
+        fireproximityprompt(prompt)
+    end)
+
+    return ok1 or ok2
+end
+
+local function ADNotify(title, desc, duration)
+    pcall(function()
+        WindUI:Notify({ Title = title, Content = desc, Duration = duration or 4 })
+    end)
+end
+
+-- FIX: AirdropLoop mit Distanz-Checks vor Öffnen
+local function AirdropLoop()
+    local lastPointName = nil
+    while Config.AutoOpenAirdrop do
+        local ok, err = pcall(function()
+            local char = LocalPlayer.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if not hum or hum.Health <= 0 then
+                ADStatusLabel:SetDesc("Tot - warte")
+                task.wait(1)
+                return
+            end
+
+            local point, pointPos = FindActiveAirdrop()
+
+            if not point then
+                ADStatusLabel:SetDesc("Keins")
+                ADPointLabel:SetDesc("Keiner")
+                ADDistanceLabel:SetDesc("-")
+                ADCrateLabel:SetDesc("Keine")
+                lastPointName = nil
+                return
+            end
+
+            -- Ziel = Landepunkt (OnPointModel)
+            local targetPos = pointPos
+
+            if lastPointName ~= point.Name then
+                ADPointLabel:SetDesc(point.Name)
+                ADStatusLabel:SetDesc("Airdrop aktiv")
+                ADNotify("📦 Airdrop!", tostring(point.Name) .. " - fahre hin...", 5)
+                lastPointName = point.Name
+            end
+
+            local root = char:FindFirstChild("HumanoidRootPart")
+            local dist = 9999
+            if targetPos and root then
+                dist = (targetPos - root.Position).Magnitude
+                ADDistanceLabel:SetDesc(string.format("%.0f m", dist))
+            end
+
+            -- Hinfahren wenn weit weg
+            if targetPos and dist > 8 then
+                ADStatusLabel:SetDesc("Fahre hin...")
+                pcall(function() Sf:TravelTo(targetPos, Config.AirdropStayFlying) end)
+                task.wait(0.3)
+
+                if root then
+                    dist = (targetPos - root.Position).Magnitude
+                    ADDistanceLabel:SetDesc(string.format("%.0f m", dist))
+                end
+            end
+
+            -- Zu weit weg -> nicht öffnen
+            if dist > 12 then
+                ADStatusLabel:SetDesc("Zu weit (" .. math.floor(dist) .. "m)")
+                ADCrateLabel:SetDesc("Warte...")
+                return
+            end
+
+            -- Prompt suchen
+            local prompt = FindCratePrompt()
+            if not prompt then
+                ADCrateLabel:SetDesc("Noch nicht gelandet")
+                ADStatusLabel:SetDesc("Warte auf Landung...")
+                return
+            end
+
+            -- Prompt-Position prüfen
+            local promptPos = nil
+            if prompt.Parent then
+                local pPart = prompt.Parent:IsA("BasePart") and prompt.Parent or prompt.Parent:FindFirstChildWhichIsA("BasePart")
+                if pPart then promptPos = pPart.Position end
+            end
+
+            if promptPos and root then
+                local pDist = (promptPos - root.Position).Magnitude
+                if pDist > 15 then
+                    ADStatusLabel:SetDesc("Crate zu weit (" .. math.floor(pDist) .. "m)")
+                    return
+                end
+            end
+
+            -- Jetzt öffnen
+            ADCrateLabel:SetDesc("Gefunden ✓")
+            ADStatusLabel:SetDesc("Öffne Crate...")
+            local opened = false
+            for i = 1, 10 do
+                if not Config.AutoOpenAirdrop then break end
+
+                if promptPos and root then
+                    local pDist = (promptPos - root.Position).Magnitude
+                    if pDist > 15 then
+                        ADStatusLabel:SetDesc("Zu weit - breche ab")
+                        break
+                    end
+                end
+
+                if TriggerCratePrompt() then
+                    opened = true
+                    ADStatusLabel:SetDesc("Geöffnet ✓")
+                    ADNotify("✅ Crate geöffnet!", "Versuch " .. i, 3)
+                    break
+                end
+                task.wait(0.5)
+            end
+
+            if not opened then
+                ADStatusLabel:SetDesc("Öffnen fehlgeschlagen")
+                ADCrateLabel:SetDesc("Prompt fail")
+            end
+
+            task.wait(2)
+        end)
+
+        if not ok then
+            ADStatusLabel:SetDesc("Fehler: " .. tostring(err):sub(1, 40))
+        end
+        task.wait(Config.AirdropScanInterval)
+    end
+    ADStatusLabel:SetDesc("Inaktiv")
+end
+
+AirdropTab:Section({ Title = '📦 Auto Open Airdrop', Icon = 'package' })
+
+AirdropTab:Toggle({
+    Title = "☑️ Auto Open Airdrop",
+    Desc = "Wartet auf Drop, fährt hin, öffnet Kiste",
+    Icon = "check",
+    Type = "Checkbox",
+    Value = false,
+    Callback = function(Value)
+        Config.AutoOpenAirdrop = Value
+        if Value then
+            if AirdropThread then pcall(task.cancel, AirdropThread) end
+            AirdropThread = task.spawn(AirdropLoop)
+            ADNotify("📦 Auto Airdrop", "Aktiviert - warte auf Drop...", 3)
+        else
+            if AirdropThread then
+                pcall(task.cancel, AirdropThread)
+                AirdropThread = nil
+            end
+            ADStatusLabel:SetDesc("Keins")
+            ADPointLabel:SetDesc("Keiner")
+            ADDistanceLabel:SetDesc("-")
+            ADCrateLabel:SetDesc("Keine")
+            ADNotify("📦 Auto Airdrop", "Deaktiviert", 2)
+        end
+    end
+})
+
+AirdropTab:Slider({
+    Title = "⏱️ Hold Duration (s)",
+    Desc = "Zusätzliche Haltezeit (Original wird berücksichtigt)",
+    Step = 0.1,
+    Value = { Min = 0, Max = 5, Default = 0.5 },
+    Callback = function(Value) Config.AirdropHoldDuration = Value end
+})
+
+AirdropTab:Slider({
+    Title = "🔍 Scan Interval (s)",
+    Step = 0.5,
+    Value = { Min = 0.5, Max = 10, Default = 1 },
+    Callback = function(Value) Config.AirdropScanInterval = Value end
+})
+
+AirdropTab:Toggle({
+    Title = "☑️ Untermap bleiben",
+    Desc = "Fahrzeug friert an Drop-Position ein",
+    Icon = "check",
+    Type = "Checkbox",
+    Value = true,
+    Callback = function(Value) Config.AirdropStayFlying = Value end
+})
+
+AirdropTab:Section({ Title = '🛠️ Manuell', Icon = 'wrench' })
+
+AirdropTab:Button({
+    Title = "🔓 Force Open Crate",
+    Icon = "unlock",
+    Callback = function()
+        task.spawn(function()
+            local char = LocalPlayer.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if not root then return end
+            if root.Position.Y > 200 then
+                ADNotify("❌ Zu weit oben", "Erst zu Crate fahren", 3)
+                return
+            end
+            if TriggerCratePrompt() then
+                ADNotify("✅ Crate geöffnet", "Manuell", 3)
+            else
+                ADNotify("❌ Keine Crate", "Nicht gefunden", 3)
+            end
+        end)
+    end
+})
+
+AirdropTab:Button({
+    Title = "📡 Scan jetzt",
+    Icon = "search",
+    Callback = function()
+        task.spawn(function()
+            local point = FindActiveAirdrop()
+            if not point then
+                ADStatusLabel:SetDesc("Keins")
+                ADPointLabel:SetDesc("Keiner")
+                ADCrateLabel:SetDesc("Keine")
+                ADNotify("📡 Scan", "Kein Airdrop aktiv", 3)
+            else
+                local prompt = FindCratePrompt()
+                ADStatusLabel:SetDesc("Aktiv")
+                ADPointLabel:SetDesc(point.Name)
+                ADCrateLabel:SetDesc(prompt and "Gefunden ✓" or "Noch nicht gelandet")
+                ADNotify("📡 Scan", "Point: " .. point.Name ..
+                    (prompt and " | Crate: ✓" or " | Crate: ✗"), 4)
+            end
+        end)
+    end
+})
+
+-- API Export
+getgenv().TravelAPI = {
+    TravelTo = function(d, s) return Sf:TravelTo(d, s) end,
+    Stop = function() Sf:StopTravel() end,
+    SetType = function(t) Config.TravelType = t end,
+    Config = Config,
+    Status = Status,
+    OpenAirdrop = function() return TriggerCratePrompt() end,
+    FindAirdrop = FindActiveAirdrop,
+}
+
+print("Travel + Airdrop geladen.")
